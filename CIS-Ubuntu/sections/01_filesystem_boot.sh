@@ -1394,6 +1394,13 @@ remediate_aide() {
         fi
     fi
 
+    if [ ! -f /var/lib/aide/aide.db ] &&
+       [ -f /var/lib/aide/aide.db.new ]; then
+        install -o root -g root -m 600 \
+            /var/lib/aide/aide.db.new \
+            /var/lib/aide/aide.db || return 1
+    fi
+
 
     #
     # Create initial database only if none exists.

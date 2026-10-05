@@ -211,7 +211,7 @@ run_command() {
 # REMEDIATION
 # ------------------------------------------------------------
 
-run_remediation() {
+run_remediation_command() {
 
     local command="$1"
     local description="$2"
@@ -280,7 +280,7 @@ validate_sshd() {
 
     log_error "sshd configuration syntax is INVALID"
 
-    return
+    return 1
 }
 
 ###############################################################################
