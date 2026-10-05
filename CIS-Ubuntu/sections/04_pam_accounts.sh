@@ -984,8 +984,7 @@ remediate_password_expiration() {
             continue
         fi
 
-        if [[ "$shell" == "/usr/sbin/nologin" ||
-              "$shell" == "/bin/false" ]]; then
+          if [[ "$shell" == */nologin || "$shell" == */false ]]; then
             continue
         fi
 
@@ -1046,8 +1045,7 @@ remediate_password_min_age() {
             continue
         fi
 
-        if [[ "$shell" == "/usr/sbin/nologin" ||
-              "$shell" == "/bin/false" ]]; then
+          if [[ "$shell" == */nologin || "$shell" == */false ]]; then
             continue
         fi
 
@@ -1133,6 +1131,16 @@ remediate_password_warning() {
 audit_password_inactive_lock() {
     local expected="${PASSWORD_INACTIVE_DAYS:-30}"
     local failures=0
+    local default_inactive
+
+    default_inactive="$(useradd -D 2>/dev/null | sed -n 's/^INACTIVE=//p')"
+    if [[ "$default_inactive" != "$expected" ]]; then
+        audit_fail \
+            "5.4.1.5" \
+            "Inactive password lock default" \
+            "Expected INACTIVE=$expected for new accounts, found ${default_inactive:-unset}"
+        failures=$((failures + 1))
+    fi
 
     while IFS=: read -r username _ uid _ _ home shell; do
 
@@ -1173,6 +1181,11 @@ audit_password_inactive_lock() {
 
 remediate_password_inactive_lock() {
     local expected="${PASSWORD_INACTIVE_DAYS:-30}"
+
+    if ! useradd -D -f "$expected"; then
+        log_error "Could not set the default inactive password lock for new accounts"
+        return 1
+    fi
 
     while IFS=: read -r username _ uid _ _ home shell; do
 

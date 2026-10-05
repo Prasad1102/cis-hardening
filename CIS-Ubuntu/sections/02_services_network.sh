@@ -993,6 +993,11 @@ remediate_ipv4_settings() {
         return 1
     fi
 
+    set_sysctl_value "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" || return 1
+    set_sysctl_value "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" || return 1
+
     return 0
 }
 

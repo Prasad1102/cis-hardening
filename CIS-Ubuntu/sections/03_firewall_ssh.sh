@@ -239,7 +239,7 @@ ssh_effective_value() {
 
     sshd -T 2>/dev/null |
         awk -v search_key="$key" '
-            $1 == search_key {
+            tolower($1) == tolower(search_key) {
                 print $2
                 exit
             }

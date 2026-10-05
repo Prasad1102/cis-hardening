@@ -5,7 +5,7 @@ set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$TEST_DIR/.." && pwd)"
 BASH_BIN="${BASH_BIN:-bash}"
-TEST_REPORT="${TEST_REPORT:-${TMPDIR:-/tmp}/cis-hardening-tests-$(date '+%Y%m%d_%H%M%S').txt}"
+TEST_REPORT="${TEST_REPORT:-$TEST_DIR/test_report.txt}"
 PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -113,6 +113,34 @@ ufw_status_parse_check() {
         printf '%s\n' '22/tcp (v6)                ALLOW IN    Anywhere (v6)' | grep -Eq "$expression"
 }
 
+ssh_effective_setting_check() {
+    "$BASH_BIN" -c '
+        command_exists() { return 0; }
+        sshd() {
+            printf "%s\n" \
+                "port 22" \
+                "ignorerhosts yes" \
+                "loglevel VERBOSE" \
+                "permitrootlogin no" \
+                "permituserenvironment no" \
+                "permitemptypasswords no" \
+                "allowtcpforwarding no" \
+                "allowagentforwarding no" \
+                "x11forwarding no"
+        }
+        source "$1"
+        [[ "$(ssh_effective_value Port)" == 22 ]] || exit 1
+        [[ "$(ssh_effective_value IgnoreRhosts)" == yes ]] || exit 1
+        [[ "$(ssh_effective_value LogLevel)" == VERBOSE ]] || exit 1
+        [[ "$(ssh_effective_value PermitRootLogin)" == no ]] || exit 1
+        [[ "$(ssh_effective_value PermitUserEnvironment)" == no ]] || exit 1
+        [[ "$(ssh_effective_value PermitEmptyPasswords)" == no ]] || exit 1
+        [[ "$(ssh_effective_value AllowTcpForwarding)" == no ]] || exit 1
+        [[ "$(ssh_effective_value AllowAgentForwarding)" == no ]] || exit 1
+        [[ "$(ssh_effective_value X11Forwarding)" == no ]] || exit 1
+    ' _ "$PROJECT_DIR/sections/03_firewall_ssh.sh"
+}
+
 package_install_check() {
     local common="$PROJECT_DIR/lib/common.sh"
     local update_line install_line
@@ -166,6 +194,7 @@ run_check "All section files source without dispatch side effects" section_sourc
 run_check "Main remediation dispatcher is not shadowed by common.sh" remediation_dispatch_check
 run_check "Audit rule grep accepts leading -w" audit_rule_grep_check
 run_check "UFW SSH parser accepts standard and verbose output" ufw_status_parse_check
+run_check "SSH effective lookup handles sshd -T lowercase keys" ssh_effective_setting_check
 run_check "Package install refreshes apt and is noninteractive" package_install_check
 
 if [[ "$(uname -s)" == "Linux" ]]; then
