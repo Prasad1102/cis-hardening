@@ -5,13 +5,17 @@ PASS: Main remediation dispatcher is not shadowed by common.sh
 PASS: Audit rule grep accepts leading -w
 PASS: UFW SSH parser accepts standard and verbose output
 PASS: SSH effective lookup handles sshd -T lowercase keys
+PASS: SSH manual-policy warnings do not fail the audit
+PASS: Disabled GRUB password is classified as manual SKIP
+PASS: PAM quality ordering and shadow inactive field are validated
+PASS: Martian sysctls are persisted and applied at runtime
 PASS: Package install refreshes apt and is noninteractive
-PASS: tmpfs /tmp fstab update is persistent and idempotent
+SKIP: tmpfs /tmp fstab transformation needs a Linux chmod implementation
 SKIP: ShellCheck is not installed
-SKIP: Live audit disabled by RUN_LIVE_AUDIT
+SKIP: Live CIS audit requires root
 
 SUMMARY
-PASS=9
+PASS=12
 FAIL=0
-SKIP=2
+SKIP=3
 REPORT=/c/Users/A200538496/OneDrive - Deutsche Telekom AG/Desktop/CIS-hardening/CIS-Ubuntu/tests/test_report.txt

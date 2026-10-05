@@ -294,6 +294,23 @@ validate_sshd() {
     return 1
 }
 
+
+get_sshd_effective_value() {
+    local key="${1:-}"
+    local effective_config
+
+    [[ -n "$key" ]] || return 1
+    command_exists sshd || return 1
+    effective_config="$(sshd -T 2>>"$LOG_DIR/sshd-validation.log")" || return 1
+
+    awk -v search_key="${key,,}" '
+        tolower($1) == search_key {
+            print $2
+            exit
+        }
+    ' <<< "$effective_config"
+}
+
 ###############################################################################
 # CIS SECTION HELPERS
 ###############################################################################

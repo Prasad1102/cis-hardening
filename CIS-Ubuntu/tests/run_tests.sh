@@ -114,11 +114,16 @@ ufw_status_parse_check() {
 }
 
 ssh_effective_setting_check() {
-    "$BASH_BIN" -c '
-        command_exists() { return 0; }
+    local fixture
+    fixture="$(mktemp -d)" || return 1
+
+    if ! "$BASH_BIN" -c '
+        mkdir() { return 0; }
+        touch() { return 0; }
         sshd() {
             printf "%s\n" \
                 "port 22" \
+                "banner /etc/issue.net" \
                 "ignorerhosts yes" \
                 "loglevel VERBOSE" \
                 "permitrootlogin no" \
@@ -128,7 +133,12 @@ ssh_effective_setting_check() {
                 "allowagentforwarding no" \
                 "x11forwarding no"
         }
-        source "$1"
+            audit_pass() { return 0; }
+            audit_fail() { return 1; }
+            source "$1/lib/common.sh"
+        LOG_DIR="$2"
+            source "$1/sections/01_filesystem_boot.sh"
+            source "$1/sections/03_firewall_ssh.sh"
         [[ "$(ssh_effective_value Port)" == 22 ]] || exit 1
         [[ "$(ssh_effective_value IgnoreRhosts)" == yes ]] || exit 1
         [[ "$(ssh_effective_value LogLevel)" == VERBOSE ]] || exit 1
@@ -138,7 +148,104 @@ ssh_effective_setting_check() {
         [[ "$(ssh_effective_value AllowTcpForwarding)" == no ]] || exit 1
         [[ "$(ssh_effective_value AllowAgentForwarding)" == no ]] || exit 1
         [[ "$(ssh_effective_value X11Forwarding)" == no ]] || exit 1
+        audit_ssh_banner || exit 1
+    ' _ "$PROJECT_DIR" "$fixture"; then
+        rm -f "$fixture/sshd-validation.log"
+        rmdir "$fixture"
+        return 1
+    fi
+
+    rm -f "$fixture/sshd-validation.log"
+    rmdir "$fixture"
+    return 0
+}
+
+ssh_warning_semantics_check() {
+    "$BASH_BIN" -c '
+        sshd() { printf "%s\\n" "port 22"; }
+        ssh() { return 0; }
+        audit_warning() { return 0; }
+        audit_pass() { return 0; }
+        audit_fail() { return 1; }
+        source "$1"
+        audit_sshd_access_config || exit 1
+        audit_sshd_pq_kex || exit 1
     ' _ "$PROJECT_DIR/sections/03_firewall_ssh.sh"
+}
+
+grub_manual_skip_check() {
+    "$BASH_BIN" -c '
+        source "$1"
+        GRUB_PASSWORD_ENABLED=no
+        GRUB_PASSWORD_HASH=""
+        audit_skip() { [[ "$1" == "1.4.1" ]]; }
+        audit_fail() { return 1; }
+        audit_grub_password
+    ' _ "$PROJECT_DIR/sections/01_filesystem_boot.sh"
+}
+
+pam_fixture_check() {
+    local fixture
+    fixture="$(mktemp)" || return 1
+    printf '%s\n' \
+        'password [success=1 default=ignore] pam_unix.so obscure use_authtok try_first_pass yescrypt' > "$fixture"
+
+    if ! "$BASH_BIN" -c '
+        source "$1"
+        PAM_PASSWORD="$2"
+        package_installed() { [[ "$1" == libpam-pwquality ]]; }
+        install_package() { return 0; }
+        backup_file() { return 0; }
+        chown() { return 0; }
+        chmod() { return 0; }
+        command_exists() { return 1; }
+        audit_pass() { return 0; }
+        audit_fail() { return 1; }
+        remediate_pam_pwquality_module || exit 1
+        remediate_pam_pwquality_module || exit 1
+        [[ "$(grep -c pam_pwquality.so "$PAM_PASSWORD")" == 1 ]] || exit 1
+        audit_pam_pwquality_module || exit 1
+        getent() {
+            [[ "$1" == shadow && "$2" == ubuntu ]] || return 1
+            printf "ubuntu:$hash:20000:0:99999:7:30::\\n"
+        }
+        [[ "$(shadow_inactive_days ubuntu)" == 30 ]]
+    ' _ "$PROJECT_DIR/sections/04_pam_accounts.sh" "$fixture"; then
+        rm -f "$fixture"
+        return 1
+    fi
+
+    rm -f "$fixture"
+    return 0
+}
+
+martian_remediation_check() {
+    local capture
+    capture="$(mktemp)" || return 1
+
+    if ! "$BASH_BIN" -c '
+        source "$1/cis.conf"
+        source "$1/sections/02_services_network.sh"
+        backup_file() { return 0; }
+        persist_sysctl_value() { printf "persist %s=%s\\n" "$1" "$2" >> "$MARTIAN_CAPTURE"; }
+        set_sysctl_value() { printf "live %s=%s\\n" "$1" "$2" >> "$MARTIAN_CAPTURE"; }
+        sysctl() { [[ "$1" == --system ]]; }
+        log_error() { return 0; }
+        log_success() { return 0; }
+        MARTIAN_CAPTURE="$2"
+        REMEDIATION_LOG="$MARTIAN_CAPTURE"
+        remediate_ipv4_settings || exit 1
+        grep -Fqx "persist net.ipv4.conf.all.log_martians=1" "$MARTIAN_CAPTURE" || exit 1
+        grep -Fqx "persist net.ipv4.conf.default.log_martians=1" "$MARTIAN_CAPTURE" || exit 1
+        grep -Fqx "live net.ipv4.conf.all.log_martians=1" "$MARTIAN_CAPTURE" || exit 1
+        grep -Fqx "live net.ipv4.conf.default.log_martians=1" "$MARTIAN_CAPTURE" || exit 1
+    ' _ "$PROJECT_DIR" "$capture"; then
+        rm -f "$capture"
+        return 1
+    fi
+
+    rm -f "$capture"
+    return 0
 }
 
 package_install_check() {
@@ -195,6 +302,10 @@ run_check "Main remediation dispatcher is not shadowed by common.sh" remediation
 run_check "Audit rule grep accepts leading -w" audit_rule_grep_check
 run_check "UFW SSH parser accepts standard and verbose output" ufw_status_parse_check
 run_check "SSH effective lookup handles sshd -T lowercase keys" ssh_effective_setting_check
+run_check "SSH manual-policy warnings do not fail the audit" ssh_warning_semantics_check
+run_check "Disabled GRUB password is classified as manual SKIP" grub_manual_skip_check
+run_check "PAM quality ordering and shadow inactive field are validated" pam_fixture_check
+run_check "Martian sysctls are persisted and applied at runtime" martian_remediation_check
 run_check "Package install refreshes apt and is noninteractive" package_install_check
 
 if [[ "$(uname -s)" == "Linux" ]]; then

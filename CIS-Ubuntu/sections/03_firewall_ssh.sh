@@ -233,17 +233,7 @@ SSH_CIS_DROPIN="/etc/ssh/sshd_config.d/00-cis-hardening.conf"
 ssh_effective_value() {
     local key="$1"
 
-    if ! command_exists sshd; then
-        return 1
-    fi
-
-    sshd -T 2>/dev/null |
-        awk -v search_key="$key" '
-            tolower($1) == tolower(search_key) {
-                print $2
-                exit
-            }
-        '
+    get_sshd_effective_value "$key"
 }
 
 
@@ -475,7 +465,7 @@ audit_sshd_access_config() {
         "sshd access configuration" \
         "No AllowUsers/AllowGroups/DenyUsers/DenyGroups restriction configured; user-specific access policy is required"
 
-    return 1
+    return 0
 }
 
 
@@ -911,7 +901,7 @@ audit_sshd_pq_kex() {
             "SSH post-quantum KEX" \
             "No supported post-quantum/hybrid KEX algorithm is exposed by this OpenSSH build"
 
-        return 1
+        return 0
     fi
 
     configured="$(ssh_effective_value "kexalgorithms" || true)"

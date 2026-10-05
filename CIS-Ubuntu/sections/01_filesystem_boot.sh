@@ -376,6 +376,14 @@ audit_grub_password() {
 
     local control_id="1.4.1"
 
+    if [[ "${GRUB_PASSWORD_ENABLED:-no}" != "yes" ||
+          -z "${GRUB_PASSWORD_HASH:-}" ]]; then
+        audit_skip \
+            "$control_id" \
+            "GRUB password is a manual control; enable it and configure a PBKDF2 hash to audit"
+        return 0
+    fi
+
     local grub_cfg="/boot/grub/grub.cfg"
 
     if [ ! -f "$grub_cfg" ]; then
@@ -967,24 +975,10 @@ audit_ssh_banner() {
 
     local control_id="1.6.5"
     local expected_banner="${SSH_BANNER_FILE:-/etc/issue.net}"
+    local effective_banner
 
-    local ssh_config="${SSH_CONFIG_FILE:-/etc/ssh/sshd_config}"
-
-
-    if [ ! -f "$ssh_config" ]; then
-
-        audit_fail \
-            "$control_id" \
-            "sshd_config does not exist"
-
-        return 1
-    fi
-
-
-    if sshd -T 2>/dev/null \
-        | awk '$1 == "banner" {print $2; exit}' \
-        | grep -Fxq "$expected_banner"
-    then
+    effective_banner="$(get_sshd_effective_value banner || true)"
+    if [[ "$effective_banner" == "$expected_banner" ]]; then
 
         audit_pass \
             "$control_id" \
@@ -996,7 +990,7 @@ audit_ssh_banner() {
 
     audit_fail \
         "$control_id" \
-        "SSH Banner is not configured to $expected_banner"
+        "SSH Banner expected $expected_banner, found ${effective_banner:-unset}"
 
     return 1
 }
@@ -1370,17 +1364,6 @@ EOF
 audit_aide() {
 
     local control_id="AIDE"
-
-
-    if ! package_installed aide; then
-
-        audit_fail \
-            "$control_id" \
-            "AIDE package is not installed"
-
-        return 1
-    fi
-
 
     if ! command_exists aide; then
 

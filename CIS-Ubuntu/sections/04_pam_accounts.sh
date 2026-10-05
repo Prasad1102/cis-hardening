@@ -113,6 +113,16 @@ audit_pam_faillock() {
 }
 
 
+pwquality_is_ordered() {
+    local pwquality_line unix_line
+    pwquality_line="$(grep -nEm1 '^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so' "$PAM_PASSWORD" | cut -d: -f1)"
+    unix_line="$(grep -nEm1 '^[[:space:]]*password[[:space:]]+.*pam_unix\.so' "$PAM_PASSWORD" | cut -d: -f1)"
+
+    [[ -n "$pwquality_line" && -n "$unix_line" ]] &&
+        (( pwquality_line < unix_line ))
+}
+
+
 audit_pam_pwquality_module() {
     if ! package_installed libpam-pwquality; then
         audit_fail \
@@ -122,11 +132,11 @@ audit_pam_pwquality_module() {
         return 1
     fi
 
-    if ! grep -Eq '^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so' "$PAM_PASSWORD"; then
+    if ! pwquality_is_ordered; then
         audit_fail \
             "5.3.3.2" \
             "PAM password quality module" \
-            "pam_pwquality.so is not enabled in $PAM_PASSWORD"
+            "pam_pwquality.so must be enabled before pam_unix in $PAM_PASSWORD"
         return 1
     fi
 
@@ -143,12 +153,34 @@ remediate_pam_pwquality_module() {
         return 1
     fi
 
-    if ! grep -Eq '^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so' "$PAM_PASSWORD"; then
-        if ! command_exists pam-auth-update ||
-           ! pam-auth-update --enable pwquality; then
-            log_error "Could not enable the pwquality PAM profile"
+    pam_backup_file "$PAM_PASSWORD" || return 1
+
+    if command_exists pam-auth-update; then
+        DEBIAN_FRONTEND=noninteractive pam-auth-update --package --enable pwquality ||
+            log_warning "pam-auth-update could not enable pwquality; enforcing the module directly"
+    fi
+
+    if ! pwquality_is_ordered; then
+        local password_tmp
+        password_tmp="$(mktemp)" || return 1
+
+        awk '
+            /^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so/ { next }
+            /^[[:space:]]*password[[:space:]]+.*pam_unix\.so/ && !inserted {
+                print "password requisite pam_pwquality.so retry=3"
+                inserted = 1
+            }
+            { print }
+            END { if (!inserted) exit 1 }
+        ' "$PAM_PASSWORD" > "$password_tmp" || {
+            rm -f "$password_tmp"
+            log_error "Could not insert pam_pwquality before pam_unix"
             return 1
-        fi
+        }
+
+        chown --reference="$PAM_PASSWORD" "$password_tmp" || return 1
+        chmod --reference="$PAM_PASSWORD" "$password_tmp" || return 1
+        mv -f "$password_tmp" "$PAM_PASSWORD" || return 1
     fi
 
     audit_pam_pwquality_module
@@ -1128,6 +1160,12 @@ remediate_password_warning() {
 # 5.4.1.5 - Inactive password lock
 # ------------------------------------------------------------
 
+shadow_inactive_days() {
+    local username="${1:-}"
+    [[ -n "$username" ]] || return 1
+    getent shadow "$username" 2>/dev/null | awk -F: 'NR == 1 {print $7}'
+}
+
 audit_password_inactive_lock() {
     local expected="${PASSWORD_INACTIVE_DAYS:-30}"
     local failures=0
@@ -1148,20 +1186,18 @@ audit_password_inactive_lock() {
             continue
         fi
 
-        if [[ "$shell" == "/usr/sbin/nologin" ||
-              "$shell" == "/bin/false" ]]; then
+          if [[ "$shell" == */nologin || "$shell" == */false ]]; then
             continue
         fi
 
         local inactive
-        inactive="$(LC_ALL=C chage -l "$username" 2>/dev/null |
-            awk -F': ' '/Password inactive/ {print $2}' || true)"
+        inactive="$(shadow_inactive_days "$username" || true)"
 
-            if [[ "$inactive" =~ [Nn]ever || ! "$inactive" =~ ^${expected}([[:space:]]|$) ]]; then
+        if [[ "$inactive" != "$expected" ]]; then
             audit_fail \
                 "5.4.1.5" \
                 "Inactive password lock" \
-                    "$username has inactive password setting '${inactive:-unknown}', expected $expected days"
+                "$username shadow inactive field is '${inactive:-unset}', expected $expected days"
             failures=$((failures + 1))
         fi
 
@@ -1193,8 +1229,7 @@ remediate_password_inactive_lock() {
             continue
         fi
 
-        if [[ "$shell" == "/usr/sbin/nologin" ||
-              "$shell" == "/bin/false" ]]; then
+          if [[ "$shell" == */nologin || "$shell" == */false ]]; then
             continue
         fi
 
