@@ -799,9 +799,9 @@ remediate_root_password_history() {
     local tmp
     tmp="$(mktemp)"
 
-    awk '
+        awk -v history="${PASSWORD_HISTORY:-24}" '
         /^[[:space:]]*password[[:space:]]+.*pam_unix\.so/ && inserted == 0 {
-                print "password required pam_pwhistory.so use_authtok remember='"${PASSWORD_HISTORY:-24}"' enforce_for_root"
+            print "password required pam_pwhistory.so use_authtok remember=" history " enforce_for_root"
             inserted = 1
             print
             next
@@ -1146,7 +1146,7 @@ audit_password_inactive_lock() {
         fi
 
         local inactive
-        inactive="$(chage -l "$username" 2>/dev/null |
+        inactive="$(LC_ALL=C chage -l "$username" 2>/dev/null |
             awk -F': ' '/Password inactive/ {print $2}' || true)"
 
             if [[ "$inactive" =~ [Nn]ever || ! "$inactive" =~ ^${expected}([[:space:]]|$) ]]; then
@@ -1205,13 +1205,7 @@ remediate_password_inactive_lock() {
 # ------------------------------------------------------------
 
 audit_root_path() {
-    local root_path
-
-    root_path="$(sudo -H -u root sh -c 'printf "%s" "$PATH"' 2>/dev/null || true)"
-
-    if [[ -z "$root_path" ]]; then
-        root_path="${PATH:-}"
-    fi
+    local root_path="${PATH:-}"
 
     local invalid=0
     local directory
@@ -1239,7 +1233,9 @@ audit_root_path() {
             continue
         fi
 
-        if [[ ! -d "$directory" ]]; then
+        local resolved_directory
+        resolved_directory="$(readlink -f -- "$directory" 2>/dev/null || true)"
+        if [[ -z "$resolved_directory" || ! -d "$resolved_directory" ]]; then
             audit_warning \
                 "5.4.2.5" \
                 "Root PATH integrity" \
@@ -1248,8 +1244,8 @@ audit_root_path() {
         fi
 
         local owner mode
-        owner="$(stat -c '%U' "$directory" 2>/dev/null || true)"
-        mode="$(stat -c '%a' "$directory" 2>/dev/null || true)"
+        owner="$(stat -c '%U' "$resolved_directory" 2>/dev/null || true)"
+        mode="$(stat -c '%a' "$resolved_directory" 2>/dev/null || true)"
 
         if [[ "$owner" != "root" ]]; then
             audit_fail \
@@ -1292,19 +1288,22 @@ remediate_root_path() {
         /bin
     )
 
-    local directory
+    local directory resolved_directory
+    local -A processed_directories=()
 
     for directory in "${directories[@]}"; do
-
-        if [[ ! -d "$directory" ]]; then
+        resolved_directory="$(readlink -f -- "$directory" 2>/dev/null || true)"
+        if [[ -z "$resolved_directory" || ! -d "$resolved_directory" ||
+              -n "${processed_directories[$resolved_directory]:-}" ]]; then
             continue
         fi
+        processed_directories["$resolved_directory"]=1
 
-        chown root:root "$directory" 2>/dev/null || {
+        chown root:root "$resolved_directory" 2>/dev/null || {
             log_warning "Could not set root ownership on $directory"
         }
 
-        chmod go-w "$directory" 2>/dev/null || {
+        chmod go-w "$resolved_directory" 2>/dev/null || {
             log_warning "Could not remove group/other write permission from $directory"
         }
 

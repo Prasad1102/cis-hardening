@@ -441,6 +441,7 @@ remediate_world_writable_files() {
 
     local changed_files=0
     local changed_dirs=0
+    local remediation_failed=0
 
     #
     # Remove only the 'other write' bit from files.
@@ -458,6 +459,7 @@ remediate_world_writable_files() {
         case "$file" in
             /etc/shadow|/etc/gshadow|/etc/shadow-|/etc/gshadow-)
                 log_warning "Skipping sensitive file from generic world-writable remediation: $file"
+                remediation_failed=1
                 continue
                 ;;
         esac
@@ -468,6 +470,7 @@ remediate_world_writable_files() {
             changed_files=$((changed_files + 1))
         else
             log_warning "Unable to change permissions on: $file"
+            remediation_failed=1
         fi
     done < <(find_world_writable_files)
 
@@ -489,6 +492,7 @@ remediate_world_writable_files() {
                     audit_pass "$directory is world-writable with sticky bit (1777)."
                 else
                     log_warning "$directory is world-writable but does not have expected sticky-bit protection."
+                    remediation_failed=1
                 fi
                 continue
                 ;;
@@ -500,10 +504,12 @@ remediate_world_writable_files() {
             changed_dirs=$((changed_dirs + 1))
         else
             log_warning "Unable to change permissions on directory: $directory"
+            remediation_failed=1
         fi
     done < <(find_world_writable_directories)
 
     audit_pass "World-writable remediation completed: ${changed_files} files and ${changed_dirs} directories changed."
+    return "$remediation_failed"
 }
 
 ###############################################################################
@@ -540,6 +546,8 @@ audit_temporary_directory_permissions() {
 remediate_temporary_directory_permissions() {
     start_section "Temporary directory permission remediation"
 
+    local failed=0
+
     for directory in /tmp /var/tmp /dev/shm; do
 
         if [[ ! -d "$directory" ]]; then
@@ -553,8 +561,11 @@ remediate_temporary_directory_permissions() {
             audit_pass "$directory permissions set to 1777."
         else
             audit_fail "Unable to set $directory permissions."
+            failed=1
         fi
     done
+
+    return "$failed"
 }
 
 ###############################################################################

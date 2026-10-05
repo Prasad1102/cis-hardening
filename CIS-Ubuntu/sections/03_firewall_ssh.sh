@@ -46,7 +46,7 @@ audit_ufw_ssh_rule() {
 
     while IFS= read -r port; do
         [[ -z "$port" ]] && continue
-        if ! grep -Eq "^[[:space:]]*${port}/tcp[[:space:]]+ALLOW IN([[:space:]]|$)" <<< "$status"; then
+        if ! grep -Eq "^[[:space:]]*${port}/tcp([[:space:]]|\\().*ALLOW([[:space:]]+IN)?([[:space:]]|$)" <<< "$status"; then
             audit_fail "FIREWALL-SSH" "UFW does not allow active/configured SSH port ${port}/tcp"
             return 1
         fi

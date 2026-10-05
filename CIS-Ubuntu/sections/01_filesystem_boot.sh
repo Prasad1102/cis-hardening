@@ -146,78 +146,121 @@ remediate_01_filesystem_boot() {
 # ============================================================
 
 audit_tmp_filesystem() {
-
     local control_id="1.1.2.1.1"
+    local mount_target filesystem_type options persistent_options option
 
-    local mount_source
+    mount_target="$(findmnt -n -o TARGET --target /tmp 2>/dev/null)"
+    filesystem_type="$(findmnt -n -o FSTYPE --target /tmp 2>/dev/null)"
+    options="$(get_mount_options /tmp)"
+    persistent_options="$(awk '$1 !~ /^#/ && $2 == "/tmp" {print $4; exit}' /etc/fstab 2>/dev/null)"
 
-    mount_source="$(findmnt -n -o SOURCE /tmp 2>/dev/null)"
-
-    if [ -z "$mount_source" ]; then
-
-        #
-        # /tmp may be part of the root filesystem.
-        #
-        audit_fail \
-            "$control_id" \
-            "/tmp is not mounted as a separate filesystem/tmpfs"
-
+    if [[ "$mount_target" != "/tmp" ]]; then
+        audit_fail "$control_id" "/tmp is not a separate mount point"
         return 1
     fi
 
-
-    local filesystem_type
-
-    filesystem_type="$(findmnt -n -o FSTYPE /tmp 2>/dev/null)"
-
-
-    if [ "$filesystem_type" = "tmpfs" ]; then
-
-        audit_pass \
-            "$control_id" \
-            "/tmp is mounted as tmpfs"
-
-        return 0
+    if [[ -z "$persistent_options" ]]; then
+        audit_fail "$control_id" "/tmp mount is not configured persistently in /etc/fstab"
+        return 1
     fi
 
+    for option in nodev nosuid noexec; do
+        if ! grep -Eq "(^|,)${option}(,|$)" <<< "$options" ||
+           ! grep -Eq "(^|,)${option}(,|$)" <<< "$persistent_options"; then
+            audit_fail "$control_id" "/tmp is missing persistent or active $option"
+            return 1
+        fi
+    done
 
-    #
-    # If /tmp is a separate block filesystem, determine whether
-    # it is actually separate from /.
-    #
-
-    local root_source
-
-    root_source="$(findmnt -n -o SOURCE / 2>/dev/null)"
+    audit_pass "$control_id" "/tmp is a separate $filesystem_type mount with nodev,nosuid,noexec"
+    return 0
+}
 
 
-    if [ "$mount_source" != "$root_source" ]; then
+update_tmp_fstab() {
+    local fstab="${1:-/etc/fstab}"
+    local tmp_size="${2:-10%}"
+    local fstab_tmp
 
-        audit_pass \
-            "$control_id" \
-            "/tmp is on a separate filesystem"
+    [[ -f "$fstab" && "$tmp_size" =~ ^[1-9][0-9]?%$ ]] || return 1
+    fstab_tmp="$(mktemp "${fstab}.XXXXXX")" || return 1
 
-        return 0
+    if ! awk -v tmp_size="$tmp_size" '
+        function has_option(options, wanted, fields, count, field_index) {
+            count = split(options, fields, ",")
+            for (field_index = 1; field_index <= count; field_index++) {
+                if (wanted ~ /=$/ ? index(fields[field_index], wanted) == 1 : fields[field_index] == wanted) return 1
+            }
+            return 0
+        }
+        function add_option(options, wanted) {
+            if (has_option(options, wanted)) return options
+            return options == "" ? wanted : options "," wanted
+        }
+        function remove_option(options, unwanted, fields, count, field_index, result) {
+            count = split(options, fields, ",")
+            result = ""
+            for (field_index = 1; field_index <= count; field_index++) {
+                if (fields[field_index] != unwanted && fields[field_index] != "") {
+                    result = result == "" ? fields[field_index] : result "," fields[field_index]
+                }
+            }
+            return result
+        }
+        BEGIN { found = 0 }
+        $1 !~ /^#/ && $2 == "/tmp" {
+            if (!found) {
+                if ($3 == "tmpfs") {
+                    if (!has_option($4, "size=")) $4 = add_option($4, "size=" tmp_size)
+                    if (!has_option($4, "mode=")) $4 = add_option($4, "mode=1777")
+                }
+                $4 = remove_option($4, "noauto")
+                $4 = add_option($4, "nodev")
+                $4 = add_option($4, "nosuid")
+                $4 = add_option($4, "noexec")
+                print
+                found = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!found) {
+                print "tmpfs /tmp tmpfs defaults,nodev,nosuid,noexec,mode=1777,size=" tmp_size " 0 0"
+            }
+        }
+    ' "$fstab" > "$fstab_tmp"; then
+        rm -f "$fstab_tmp"
+        return 1
     fi
 
-
-    audit_fail \
-        "$control_id" \
-        "/tmp shares the root filesystem"
-
-    return 1
+    if ! chmod --reference="$fstab" "$fstab_tmp" || ! mv -f "$fstab_tmp" "$fstab"; then
+        rm -f "$fstab_tmp"
+        return 1
+    fi
 }
 
 
 remediate_tmp_filesystem() {
+    if [[ "${CONFIGURE_TMP_MOUNT:-no}" != "yes" ]]; then
+        log_warning "Automatic /tmp configuration is disabled in cis.conf."
+        return 0
+    fi
 
-    log_warning \
-        "Automatic /tmp partition creation is intentionally not implemented."
+    local fstab="/etc/fstab"
+    backup_file "$fstab" || return 1
+    update_tmp_fstab "$fstab" "${TMPFS_TMP_SIZE:-10%}" || return 1
 
-    log_warning \
-        "Create a dedicated /tmp filesystem or tmpfs according to your server design."
+    local mount_target
+    mount_target="$(findmnt -n -o TARGET --target /tmp 2>/dev/null)"
+    if [[ "$mount_target" == "/tmp" ]]; then
+        mount -o remount,nodev,nosuid,noexec /tmp >> "$REMEDIATION_LOG" 2>&1 || return 1
+    else
+        mount /tmp >> "$REMEDIATION_LOG" 2>&1 || return 1
+    fi
 
-    return 0
+    chmod 1777 /tmp || return 1
+    audit_tmp_filesystem
 }
 
 
@@ -349,20 +392,15 @@ audit_grub_password() {
     local password_present="no"
 
 
-    if grep -Eq \
-        '^[[:space:]]*set[[:space:]]+superusers=' \
-        "$grub_cfg"
-    then
-
+    if grep -Fq -- "set superusers=\"${GRUB_SUPERUSER:-grubadmin}\"" "$grub_cfg"; then
         superuser_present="yes"
     fi
 
-
-    if grep -Eq \
-        '^[[:space:]]*password_pbkdf2[[:space:]]+' \
-        "$grub_cfg"
-    then
-
+    if [[ -n "${GRUB_PASSWORD_HASH:-}" ]]; then
+        if grep -Fq -- "password_pbkdf2 ${GRUB_SUPERUSER:-grubadmin} ${GRUB_PASSWORD_HASH}" "$grub_cfg"; then
+            password_present="yes"
+        fi
+    elif grep -Eq '^[[:space:]]*password_pbkdf2[[:space:]]+' "$grub_cfg"; then
         password_present="yes"
     fi
 
@@ -928,6 +966,7 @@ audit_issue_net() {
 audit_ssh_banner() {
 
     local control_id="1.6.5"
+    local expected_banner="${SSH_BANNER_FILE:-/etc/issue.net}"
 
     local ssh_config="${SSH_CONFIG_FILE:-/etc/ssh/sshd_config}"
 
@@ -944,12 +983,12 @@ audit_ssh_banner() {
 
     if sshd -T 2>/dev/null \
         | awk '$1 == "banner" {print $2; exit}' \
-        | grep -Fxq "${ISSUE_NET_FILE:-/etc/issue.net}"
+        | grep -Fxq "$expected_banner"
     then
 
         audit_pass \
             "$control_id" \
-            "SSH Banner points to ${ISSUE_NET_FILE:-/etc/issue.net}"
+            "SSH Banner points to $expected_banner"
 
         return 0
     fi
@@ -957,7 +996,7 @@ audit_ssh_banner() {
 
     audit_fail \
         "$control_id" \
-        "SSH Banner is not configured to ${ISSUE_NET_FILE:-/etc/issue.net}"
+        "SSH Banner is not configured to $expected_banner"
 
     return 1
 }
@@ -1276,6 +1315,58 @@ remediate_pam_motd() {
 # on every Ubuntu installation.
 # ============================================================
 
+aide_timer_unit() {
+    command_exists systemctl || return 1
+
+    systemctl list-unit-files --type=timer --no-legend 2>/dev/null \
+        | awk 'tolower($1) ~ /aide.*\.timer$/ {print $1; exit}'
+}
+
+ensure_aide_timer() {
+    local timer_unit aide_bin
+    timer_unit="$(aide_timer_unit || true)"
+
+    if [[ -z "$timer_unit" ]]; then
+        aide_bin="$(command -v aide)" || return 1
+        local service_file="/etc/systemd/system/cis-aide-check.service"
+        local timer_file="/etc/systemd/system/cis-aide-check.timer"
+
+        backup_file "$service_file" || return 1
+        backup_file "$timer_file" || return 1
+
+        cat > "$service_file" <<EOF
+[Unit]
+Description=CIS AIDE filesystem integrity check
+
+[Service]
+Type=oneshot
+ExecStart=${aide_bin} --check
+Nice=10
+IOSchedulingClass=idle
+EOF
+
+        cat > "$timer_file" <<'EOF'
+[Unit]
+Description=Daily CIS AIDE filesystem integrity check
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+EOF
+
+        chown root:root "$service_file" "$timer_file" || return 1
+        chmod 644 "$service_file" "$timer_file" || return 1
+        systemctl daemon-reload || return 1
+        timer_unit="cis-aide-check.timer"
+    fi
+
+    systemctl enable --now "$timer_unit" >> "$REMEDIATION_LOG" 2>&1
+}
+
 audit_aide() {
 
     local control_id="AIDE"
@@ -1336,30 +1427,16 @@ audit_aide() {
     #
 
     if [ "${ENABLE_AIDE_TIMER:-yes}" = "yes" ]; then
+        local timer_unit
+        timer_unit="$(aide_timer_unit || true)"
 
-        if systemctl list-unit-files \
-            | grep -Eq '^aidecheck\.timer[[:space:]]'
-        then
-
-            if systemctl is-enabled aidecheck.timer >/dev/null 2>&1 &&
-               systemctl is-active aidecheck.timer >/dev/null 2>&1
-            then
-
-                audit_pass \
-                    "$control_id" \
-                    "aidecheck.timer is enabled and active"
-
-            else
-
-                audit_warning \
-                    "$control_id" \
-                    "aidecheck.timer exists but is not both enabled and active"
-            fi
+        if [[ -n "$timer_unit" ]] &&
+           systemctl is-enabled "$timer_unit" >/dev/null 2>&1 &&
+           systemctl is-active "$timer_unit" >/dev/null 2>&1; then
+            audit_pass "$control_id" "$timer_unit is enabled and active"
         else
-
-            audit_warning \
-                "$control_id" \
-                "aidecheck.timer was not found"
+            audit_fail "$control_id" "No enabled and active AIDE systemd timer was found"
+            return 1
         fi
     fi
 
@@ -1450,21 +1527,9 @@ remediate_aide() {
     #
 
     if [ "${ENABLE_AIDE_TIMER:-yes}" = "yes" ]; then
-
-        if systemctl list-unit-files \
-            | grep -Eq '^aidecheck\.timer[[:space:]]'
-        then
-
-            systemctl enable aidecheck.timer \
-                >> "$REMEDIATION_LOG" 2>&1 || true
-
-            systemctl start aidecheck.timer \
-                >> "$REMEDIATION_LOG" 2>&1 || true
-
-        else
-
-            log_warning \
-                "aidecheck.timer is not available on this installation."
+        if ! ensure_aide_timer; then
+            log_error "Could not enable or create an AIDE integrity timer."
+            return 1
         fi
     fi
 

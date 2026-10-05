@@ -977,6 +977,17 @@ remediate_ipv4_settings() {
         "net.ipv4.tcp_syncookies" \
         "${NET_IPV4_TCP_SYNCOOKIES}"
 
+    # /etc/sysctl.conf is loaded after sysctl.d; keep martian logging last.
+    backup_file /etc/sysctl.conf || return 1
+    persist_sysctl_value \
+        "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" \
+        /etc/sysctl.conf || return 1
+    persist_sysctl_value \
+        "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
+        /etc/sysctl.conf || return 1
+
     if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
         log_error "Unable to apply the persisted IPv4 sysctl configuration."
         return 1

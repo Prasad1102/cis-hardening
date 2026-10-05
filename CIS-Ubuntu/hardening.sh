@@ -400,6 +400,7 @@ validate_configuration() {
 
     local boolean_vars=(
         ENABLE_REMEDIATION
+        CONFIGURE_TMP_MOUNT
         ENABLE_APPARMOR
         APPARMOR_RESTRICT_UNPRIVILEGED_UNCONFINED
         DISABLE_APPORT
@@ -441,6 +442,12 @@ validate_configuration() {
         printf '%b DEFAULT_UMASK is invalid.\n' "${RED}[FAIL]${RESET}"
         config_errors=1
     fi
+
+        if [[ "${CONFIGURE_TMP_MOUNT:-}" == "yes" &&
+                    ! "${TMPFS_TMP_SIZE:-}" =~ ^[1-9][0-9]?%$ ]]; then
+                printf '%b TMPFS_TMP_SIZE must be between 1%% and 99%%.\n' "${RED}[FAIL]${RESET}"
+                config_errors=1
+        fi
 
     if [[ "${REMOTE_SYSLOG_ENABLED:-no}" == "yes" &&
           "${REMOTE_SYSLOG_PROTOCOL:-}" != "tcp" &&
@@ -860,6 +867,7 @@ preflight_checks() {
         sed
         grep
         find
+        readlink
         stat
         systemctl
         mount
@@ -921,6 +929,8 @@ create_pre_remediation_backup() {
         /etc/fstab
         /etc/default/grub
         /etc/grub.d/01_cis_security
+        /etc/systemd/system/cis-aide-check.service
+        /etc/systemd/system/cis-aide-check.timer
         /etc/sysctl.d/99-cis-hardening.conf
         /etc/modprobe.d/99-cis-hardening.conf
         /etc/default/apport

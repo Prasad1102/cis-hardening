@@ -542,7 +542,8 @@ remediate_auditd_service() {
     fi
 
     systemctl enable auditd >/dev/null 2>&1 || {
-        log_warning "Could not enable auditd"
+        log_error "Could not enable auditd"
+        return 1
     }
 
     if systemctl is-active --quiet auditd; then
@@ -597,17 +598,17 @@ audit_audit_rules_directory() {
 
 
 audit_cis_audit_rules() {
-    if [[ ! -f "$AUDIT_CIS_RULES" ]]; then
+    if [[ ! -d "$AUDIT_RULES_DIR" ]]; then
         audit_fail \
             "6.2-RULES" \
             "CIS audit rules" \
-            "$AUDIT_CIS_RULES does not exist"
+            "$AUDIT_RULES_DIR does not exist"
 
         return 1
     fi
 
     local failures=0
-    local rule
+    local rule rule_path
 
     local expected_rules=(
         "-w /etc/passwd -p wa -k identity"
@@ -624,8 +625,14 @@ audit_cis_audit_rules() {
     )
 
     for rule in "${expected_rules[@]}"; do
+        rule_path="$(awk '{print $2}' <<< "$rule")"
 
-        if grep -Fqx "$rule" "$AUDIT_CIS_RULES"; then
+        if [[ ! -e "$rule_path" ]]; then
+            audit_skip "6.2-RULES" "Audit watch path does not exist: $rule_path"
+            continue
+        fi
+
+        if grep -RFx --include='*.rules' -- "$rule" "$AUDIT_RULES_DIR" >/dev/null 2>&1; then
             audit_pass \
                 "6.2-RULES" \
                 "Audit rule" \
@@ -697,6 +704,10 @@ EOF
 
     chown root:root "$AUDIT_CIS_RULES"
     chmod 640 "$AUDIT_CIS_RULES"
+
+    if [[ ! -e /var/log/faillog ]]; then
+        sed -i '\|^-w /var/log/faillog -p wa -k logins$|d' "$AUDIT_CIS_RULES"
+    fi
 
     audit_pass \
         "6.2-RULES" \

@@ -30,6 +30,7 @@ LOG_DIR="/root/cis-logs/$TIMESTAMP"
 REMEDIATION_LOG="$LOG_DIR/remediation.log"
 
 CURRENT_SECTION=""
+APT_UPDATED="no"
 
 mkdir -p "$BACKUP_DIR"
 mkdir -p "$LOG_DIR"
@@ -137,20 +138,29 @@ install_package() {
         return 1
     fi
 
+    export DEBIAN_FRONTEND=noninteractive
+
+    if [ "$APT_UPDATED" != "yes" ]; then
+        log_info "Refreshing apt package indexes"
+        if ! apt-get update; then
+            log_error "apt-get update failed"
+            return 1
+        fi
+        APT_UPDATED="yes"
+    fi
+
     log_info "Installing package: $package"
 
-    DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y \
+    if apt-get install -y \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \
-        "$package"
-
-    if [ $? -eq 0 ]; then
+        "$package"; then
         log_success "Installed: $package"
-    else
-        log_error "Failed to install: $package"
-        return 1
+        return 0
     fi
+
+    log_error "Failed to install: $package"
+    return 1
 }
 
 
@@ -172,6 +182,7 @@ remove_package() {
 
     log_info "Removing package: $package"
 
+    export DEBIAN_FRONTEND=noninteractive
     if DEBIAN_FRONTEND=noninteractive apt-get remove -y "$package"; then
         log_success "Removed package: $package"
         return 0
