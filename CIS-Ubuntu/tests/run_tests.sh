@@ -248,6 +248,38 @@ martian_remediation_check() {
     return 0
 }
 
+martian_persisted_audit_check() {
+    local fixture
+    fixture="$(mktemp)" || return 1
+    printf '%s\n' \
+        'net.ipv4.conf.all.log_martians = 1' \
+        'net.ipv4.conf.default.log_martians=1' > "$fixture"
+
+    if ! "$BASH_BIN" -c '
+        source "$1/sections/02_services_network.sh"
+        audit_pass() { PASSED=$((PASSED + 1)); return 0; }
+        audit_fail() { FAILED=$((FAILED + 1)); return 1; }
+        PASSED=0
+        FAILED=0
+        audit_persisted_sysctl_value 3.3.1.16 net.ipv4.conf.all.log_martians 1 "$2" || exit 1
+        audit_persisted_sysctl_value 3.3.1.17 net.ipv4.conf.default.log_martians 1 "$2" || exit 1
+        [[ "$PASSED" == 2 && "$FAILED" == 0 ]]
+    ' _ "$PROJECT_DIR" "$fixture"; then
+        rm -f "$fixture"
+        return 1
+    fi
+
+    rm -f "$fixture"
+    return 0
+}
+
+inactive_default_remediation_check() {
+    grep -Fq 'useradd -D -f "$expected"' \
+        "$PROJECT_DIR/sections/04_pam_accounts.sh" &&
+        grep -Fq 'expected="${PASSWORD_INACTIVE_DAYS:-30}"' \
+            "$PROJECT_DIR/sections/04_pam_accounts.sh"
+}
+
 package_install_check() {
     local common="$PROJECT_DIR/lib/common.sh"
     local update_line install_line
@@ -306,6 +338,8 @@ run_check "SSH manual-policy warnings do not fail the audit" ssh_warning_semanti
 run_check "Disabled GRUB password is classified as manual SKIP" grub_manual_skip_check
 run_check "PAM quality ordering and shadow inactive field are validated" pam_fixture_check
 run_check "Martian sysctls are persisted and applied at runtime" martian_remediation_check
+run_check "Martian audit verifies persisted sysctl.conf values" martian_persisted_audit_check
+run_check "Inactive default remediation sets useradd -D -f 30" inactive_default_remediation_check
 run_check "Package install refreshes apt and is noninteractive" package_install_check
 
 if [[ "$(uname -s)" == "Linux" ]]; then

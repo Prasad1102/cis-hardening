@@ -616,6 +616,27 @@ remediate_kernel_modules() {
 #   3.3.1.18
 # ============================================================
 
+audit_persisted_sysctl_value() {
+    local control_id="$1"
+    local key="$2"
+    local expected="$3"
+    local config_file="${4:-/etc/sysctl.conf}"
+    local actual=""
+
+    if [[ -f "$config_file" ]]; then
+        actual="$(awk -F '[[:space:]=]+' -v key="$key" \
+            '$1 !~ /^#/ && $1 == key {value=$2} END {print value}' "$config_file")"
+    fi
+
+    if [[ "$actual" == "$expected" ]]; then
+        audit_pass "$control_id" "$key persisted as $actual in $config_file"
+        return 0
+    fi
+
+    audit_fail "$control_id" "$key persisted value is '${actual:-unset}', expected $expected in $config_file"
+    return 1
+}
+
 audit_ipv4_settings() {
 
     local failed=0
@@ -752,6 +773,12 @@ audit_ipv4_settings() {
         "${NET_IPV4_ALL_LOG_MARTIANS}" \
         || failed=1
 
+    audit_persisted_sysctl_value \
+        "3.3.1.16" \
+        "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" \
+        /etc/sysctl.conf || failed=1
+
 
     #
     # 3.3.1.17
@@ -763,6 +790,12 @@ audit_ipv4_settings() {
         "$(get_sysctl_value net.ipv4.conf.default.log_martians)" \
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
         || failed=1
+
+    audit_persisted_sysctl_value \
+        "3.3.1.17" \
+        "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
+        /etc/sysctl.conf || failed=1
 
 
     #
