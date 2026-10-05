@@ -64,18 +64,20 @@ section_02_services_network() {
 
     start_section "02 - SERVICES / NETWORK"
 
+    local status=0
+
     case "${MODE:-audit}" in
 
         audit)
-            audit_02_services_network
+            audit_02_services_network || status=$?
             ;;
 
         remediate)
-            remediate_02_services_network
+            remediate_02_services_network || status=$?
             ;;
 
         verify)
-            audit_02_services_network
+            audit_02_services_network || status=$?
             ;;
 
         *)
@@ -87,6 +89,7 @@ section_02_services_network() {
     esac
 
     end_section
+    return "$status"
 }
 
 
@@ -118,15 +121,18 @@ remediate_02_services_network() {
 
     log_info "Starting services and network remediation."
 
-    remediate_telnet_client
-    remediate_ftp_client
+    local failed=0
 
-    remediate_kernel_modules
+    remediate_telnet_client || failed=1
+    remediate_ftp_client || failed=1
 
-    remediate_ipv4_settings
-    remediate_ipv6_settings
+    remediate_kernel_modules || failed=1
+
+    remediate_ipv4_settings || failed=1
+    remediate_ipv6_settings || failed=1
 
     log_info "Services and network remediation completed."
+    return "$failed"
 }
 
 
@@ -376,7 +382,7 @@ audit_kernel_modules() {
     local failed=0
 
 
-    if [ "${DISABLE_ATM:-yes}" = "yes" ]; then
+    if [ "${DISABLE_ATM_MODULE:-yes}" = "yes" ]; then
 
         audit_single_kernel_module \
             "3.2.1" \
@@ -391,7 +397,7 @@ audit_kernel_modules() {
     fi
 
 
-    if [ "${DISABLE_CAN:-yes}" = "yes" ]; then
+    if [ "${DISABLE_CAN_MODULE:-yes}" = "yes" ]; then
 
         audit_single_kernel_module \
             "3.2.2" \
@@ -406,7 +412,7 @@ audit_kernel_modules() {
     fi
 
 
-    if [ "${DISABLE_SCTP:-yes}" = "yes" ]; then
+    if [ "${DISABLE_SCTP_MODULE:-yes}" = "yes" ]; then
 
         audit_single_kernel_module \
             "3.2.5" \
@@ -421,7 +427,7 @@ audit_kernel_modules() {
     fi
 
 
-    if [ "${DISABLE_TIPC:-yes}" = "yes" ]; then
+    if [ "${DISABLE_TIPC_MODULE:-yes}" = "yes" ]; then
 
         audit_single_kernel_module \
             "3.2.6" \
@@ -544,22 +550,22 @@ remediate_single_kernel_module() {
 
 remediate_kernel_modules() {
 
-    if [ "${DISABLE_ATM:-yes}" = "yes" ]; then
+    if [ "${DISABLE_ATM_MODULE:-yes}" = "yes" ]; then
         remediate_single_kernel_module atm
     fi
 
 
-    if [ "${DISABLE_CAN:-yes}" = "yes" ]; then
+    if [ "${DISABLE_CAN_MODULE:-yes}" = "yes" ]; then
         remediate_single_kernel_module can
     fi
 
 
-    if [ "${DISABLE_SCTP:-yes}" = "yes" ]; then
+    if [ "${DISABLE_SCTP_MODULE:-yes}" = "yes" ]; then
         remediate_single_kernel_module sctp
     fi
 
 
-    if [ "${DISABLE_TIPC:-yes}" = "yes" ]; then
+    if [ "${DISABLE_TIPC_MODULE:-yes}" = "yes" ]; then
         remediate_single_kernel_module tipc
     fi
 
@@ -971,6 +977,10 @@ remediate_ipv4_settings() {
         "net.ipv4.tcp_syncookies" \
         "${NET_IPV4_TCP_SYNCOOKIES}"
 
+    if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
+        log_error "Unable to apply the persisted IPv4 sysctl configuration."
+        return 1
+    fi
 
     return 0
 }
@@ -1235,6 +1245,10 @@ remediate_ipv6_settings() {
         "net.ipv6.conf.default.accept_ra" \
         "${NET_IPV6_DEFAULT_ACCEPT_RA}"
 
+    if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
+        log_error "Unable to apply the persisted IPv6 sysctl configuration."
+        return 1
+    fi
 
     return 0
 }

@@ -28,6 +28,34 @@ audit_ufw_service() {
     return 1
 }
 
+audit_ufw_ssh_rule() {
+    if [[ "${REQUIRE_SSH_UFW_RULE:-yes}" != "yes" ]]; then
+        audit_skip "FIREWALL-SSH" "SSH UFW rule requirement is disabled in cis.conf"
+        return 0
+    fi
+
+    if ! command_exists ufw || ! command_exists sshd; then
+        audit_fail "FIREWALL-SSH" "Cannot verify the SSH UFW rule because ufw or sshd is unavailable"
+        return 1
+    fi
+
+    local status active_ports port
+    status="$(ufw status 2>/dev/null || true)"
+    active_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' || true)"
+    active_ports="$(printf '%s\n' "$active_ports" "${SSH_PORT:-22}" | sort -un)"
+
+    while IFS= read -r port; do
+        [[ -z "$port" ]] && continue
+        if ! grep -Eq "^[[:space:]]*${port}/tcp[[:space:]]+ALLOW IN([[:space:]]|$)" <<< "$status"; then
+            audit_fail "FIREWALL-SSH" "UFW does not allow active/configured SSH port ${port}/tcp"
+            return 1
+        fi
+    done <<< "$active_ports"
+
+    audit_pass "FIREWALL-SSH" "UFW allows the active and configured SSH TCP ports"
+    return 0
+}
+
 remediate_ufw_service() {
     log_info "Configuring UFW firewall"
 
@@ -52,10 +80,10 @@ remediate_ufw_service() {
     ufw default deny routed >/dev/null 2>&1 || return 1
 
     # Add configured additional TCP ports.
-    if [[ -n "${UFW_ALLOW_TCP:-}" ]]; then
+    if [[ -n "${UFW_ALLOWED_TCP_PORTS:-}" ]]; then
         local port
 
-        IFS=',' read -ra ports <<< "$UFW_ALLOW_TCP"
+        IFS=', ' read -ra ports <<< "$UFW_ALLOWED_TCP_PORTS"
 
         for port in "${ports[@]}"; do
             port="$(echo "$port" | xargs)"
@@ -70,10 +98,10 @@ remediate_ufw_service() {
     fi
 
     # Add configured additional UDP ports.
-    if [[ -n "${UFW_ALLOW_UDP:-}" ]]; then
+    if [[ -n "${UFW_ALLOWED_UDP_PORTS:-}" ]]; then
         local port
 
-        IFS=',' read -ra ports <<< "$UFW_ALLOW_UDP"
+        IFS=', ' read -ra ports <<< "$UFW_ALLOWED_UDP_PORTS"
 
         for port in "${ports[@]}"; do
             port="$(echo "$port" | xargs)"
@@ -120,6 +148,18 @@ audit_ufw_defaults() {
             "4.1.3" \
             "UFW incoming default" \
             "Default incoming policy is not deny"
+    fi
+
+    if echo "$status" | grep -qi "Default:.*allow (outgoing)"; then
+        audit_pass \
+            "4.1.4" \
+            "UFW outgoing default" \
+            "Default outgoing policy is allow"
+    else
+        audit_fail \
+            "4.1.4" \
+            "UFW outgoing default" \
+            "Default outgoing policy is not allow"
     fi
 
     # --------------------------------------------------------
@@ -187,7 +227,7 @@ remediate_ufw_defaults() {
 # SSH configuration helpers
 # ------------------------------------------------------------
 
-SSH_CIS_DROPIN="/etc/ssh/sshd_config.d/99-cis-hardening.conf"
+SSH_CIS_DROPIN="/etc/ssh/sshd_config.d/00-cis-hardening.conf"
 
 
 ssh_effective_value() {
@@ -485,7 +525,7 @@ remediate_sshd_access_config() {
 # ------------------------------------------------------------
 
 audit_sshd_banner() {
-    local expected="${SSH_BANNER_PATH:-/etc/issue.net}"
+    local expected="${SSH_BANNER_FILE:-/etc/issue.net}"
     local value
 
     value="$(ssh_effective_value "banner" || true)"
@@ -508,7 +548,7 @@ audit_sshd_banner() {
 
 
 remediate_sshd_banner() {
-    local banner_path="${SSH_BANNER_PATH:-/etc/issue.net}"
+    local banner_path="${SSH_BANNER_FILE:-/etc/issue.net}"
 
     prepare_ssh_dropin || return 1
 
@@ -989,7 +1029,11 @@ remediate_ssh() {
 
     write_ssh_setting \
         "Banner" \
-        "${SSH_BANNER_PATH:-/etc/issue.net}"
+        "${SSH_BANNER_FILE:-/etc/issue.net}"
+
+    write_ssh_setting \
+        "Port" \
+        "${SSH_PORT:-22}"
 
     write_ssh_setting \
         "ClientAliveInterval" \
@@ -1130,45 +1174,45 @@ remediate_ufw() {
 
     local ssh_port="${SSH_PORT:-22}"
 
-    # IMPORTANT:
-    # Allow SSH before enabling the firewall.
-    ufw allow "${ssh_port}/tcp" >/dev/null 2>&1 || {
-        log_error "Unable to create UFW SSH rule for port ${ssh_port}"
+    if [[ "${REQUIRE_SSH_UFW_RULE:-yes}" == "yes" ]] &&
+       ! command_exists sshd; then
+        log_error "Refusing to enable UFW without an installed SSH server to protect"
         return 1
-    }
-
-    # Optional configured application ports.
-    if [[ -n "${UFW_ALLOW_TCP:-}" ]]; then
-        local port
-
-        IFS=',' read -ra ports <<< "$UFW_ALLOW_TCP"
-
-        for port in "${ports[@]}"; do
-            port="$(echo "$port" | xargs)"
-
-            [[ -z "$port" ]] && continue
-
-            ufw allow "${port}/tcp" >/dev/null 2>&1 || {
-                log_warning "Could not allow TCP port $port"
-            }
-        done
     fi
 
-    if [[ -n "${UFW_ALLOW_UDP:-}" ]]; then
-        local port
+    # Permit both the currently active SSH port(s) and the configured target.
+    local active_ssh_ports
+    active_ssh_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' || true)"
+    active_ssh_ports="$(printf '%s\n' "$active_ssh_ports" "$ssh_port" | sort -un)"
+    local port
+    while IFS= read -r port; do
+        [[ -z "$port" ]] && continue
+        ufw allow "${port}/tcp" >/dev/null 2>&1 || {
+            log_error "Unable to create UFW SSH rule for port ${port}"
+            return 1
+        }
+    done <<< "$active_ssh_ports"
 
-        IFS=',' read -ra ports <<< "$UFW_ALLOW_UDP"
+    local ports
+    IFS=', ' read -ra ports <<< "${UFW_ALLOWED_TCP_PORTS:-}"
+    for port in "${ports[@]}"; do
+        [[ -z "$port" ]] && continue
+        [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) || {
+            log_error "Invalid configured UFW TCP port: $port"
+            return 1
+        }
+        ufw allow "${port}/tcp" >/dev/null 2>&1 || return 1
+    done
 
-        for port in "${ports[@]}"; do
-            port="$(echo "$port" | xargs)"
-
-            [[ -z "$port" ]] && continue
-
-            ufw allow "${port}/udp" >/dev/null 2>&1 || {
-                log_warning "Could not allow UDP port $port"
-            }
-        done
-    fi
+    IFS=', ' read -ra ports <<< "${UFW_ALLOWED_UDP_PORTS:-}"
+    for port in "${ports[@]}"; do
+        [[ -z "$port" ]] && continue
+        [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) || {
+            log_error "Invalid configured UFW UDP port: $port"
+            return 1
+        }
+        ufw allow "${port}/udp" >/dev/null 2>&1 || return 1
+    done
 
     ufw default deny incoming >/dev/null 2>&1 || return 1
     ufw default allow outgoing >/dev/null 2>&1 || return 1
@@ -1224,6 +1268,7 @@ section_03_audit() {
     # --------------------------------------------------------
 
     audit_ufw_service || failures=$((failures + 1))
+    audit_ufw_ssh_rule || failures=$((failures + 1))
     audit_ufw_defaults
 
     # --------------------------------------------------------
@@ -1240,6 +1285,11 @@ section_03_audit() {
     else
         audit_sshd_config_permissions || failures=$((failures + 1))
         audit_sshd_access_config || failures=$((failures + 1))
+        audit_sshd_setting \
+            "SSH-PORT" \
+            "SSH listening port" \
+            "Port" \
+            "${SSH_PORT:-22}" || failures=$((failures + 1))
         audit_sshd_banner || failures=$((failures + 1))
         audit_sshd_client_alive || failures=$((failures + 1))
         audit_sshd_ignore_rhosts || failures=$((failures + 1))

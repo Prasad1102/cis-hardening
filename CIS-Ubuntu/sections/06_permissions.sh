@@ -319,22 +319,13 @@ audit_sudo_permissions() {
             group="$(get_file_group "$file")"
 
             #
-            # sudoers.d files should not be writable by group/other.
-            #
             if [[ "$owner" == "root" &&
                   "$group" == "root" &&
-                  "$mode" =~ ^[0-6]?4[0-4]$|^440$ ]]; then
-                audit_pass "$file has restricted sudo configuration permissions."
+                  "$mode" == "440" ]]; then
+                audit_pass "$file is root:root 0440."
             else
-                if [[ "$mode" =~ [2367]$ ]]; then
-                    audit_fail "$file is writable by others."
-                    failed=1
-                elif [[ "$owner" != "root" || "$group" != "root" ]]; then
-                    audit_fail "$file is not owned by root:root."
-                    failed=1
-                else
-                    audit_pass "$file ownership is root:root and permissions are restricted."
-                fi
+                audit_fail "$file is ${owner}:${group} ${mode}; expected root:root 0440."
+                failed=1
             fi
         done < <(find /etc/sudoers.d -type f -print0 2>/dev/null)
     else
@@ -360,10 +351,7 @@ remediate_sudo_permissions() {
             chown root:root "$file"
 
             #
-            # Remove group/other write permissions without changing
-            # the existing read/execute semantics unnecessarily.
-            #
-            chmod go-w "$file"
+            chmod 440 "$file"
         done < <(find /etc/sudoers.d -type f -print0 2>/dev/null)
     fi
 
@@ -388,24 +376,15 @@ remediate_sudo_permissions() {
 
 find_world_writable_files() {
     #
-    # Exclude virtual/runtime filesystems.
-    #
-    # /proc, /sys, /dev and /run contain dynamically generated objects and
-    # should not be treated like ordinary persistent filesystem content.
-    #
     find / \
-        -xdev \
-        -type f \
-        -perm -0002 \
-        -print 2>/dev/null
+        \( -path /proc -o -path /sys -o -path /dev -o -path /run \) -prune -o \
+        -type f -perm -0002 -print 2>/dev/null
 }
 
 find_world_writable_directories() {
     find / \
-        -xdev \
-        -type d \
-        -perm -0002 \
-        -print 2>/dev/null
+        \( -path /proc -o -path /sys -o -path /dev -o -path /run \) -prune -o \
+        -type d -perm -0002 ! -perm -1000 -print 2>/dev/null
 }
 
 audit_world_writable_files() {
@@ -445,9 +424,11 @@ audit_world_writable_files() {
 
     if [[ "$file_count" -eq 0 && "$dir_count" -eq 0 ]]; then
         audit_pass "No world-writable files or directories found on the persistent root filesystem."
+        return 0
     else
         audit_fail "Found ${file_count} world-writable files and ${dir_count} world-writable directories."
-        log_warn "Detailed report: $PERMISSION_REPORT"
+        log_warning "Detailed report: $PERMISSION_REPORT"
+        return 1
     fi
 }
 
@@ -476,7 +457,7 @@ remediate_world_writable_files() {
         #
         case "$file" in
             /etc/shadow|/etc/gshadow|/etc/shadow-|/etc/gshadow-)
-                log_warn "Skipping sensitive file from generic world-writable remediation: $file"
+                log_warning "Skipping sensitive file from generic world-writable remediation: $file"
                 continue
                 ;;
         esac
@@ -486,7 +467,7 @@ remediate_world_writable_files() {
         if chmod o-w "$file"; then
             changed_files=$((changed_files + 1))
         else
-            log_warn "Unable to change permissions on: $file"
+            log_warning "Unable to change permissions on: $file"
         fi
     done < <(find_world_writable_files)
 
@@ -507,7 +488,7 @@ remediate_world_writable_files() {
                 if [[ "$(stat -c '%a' "$directory" 2>/dev/null)" == "1777" ]]; then
                     audit_pass "$directory is world-writable with sticky bit (1777)."
                 else
-                    log_warn "$directory is world-writable but does not have expected sticky-bit protection."
+                    log_warning "$directory is world-writable but does not have expected sticky-bit protection."
                 fi
                 continue
                 ;;
@@ -518,7 +499,7 @@ remediate_world_writable_files() {
         if chmod o-w "$directory"; then
             changed_dirs=$((changed_dirs + 1))
         else
-            log_warn "Unable to change permissions on directory: $directory"
+            log_warning "Unable to change permissions on directory: $directory"
         fi
     done < <(find_world_writable_directories)
 
@@ -614,9 +595,9 @@ audit_cron_permissions() {
         #
         # Cron objects must not be writable by group/other.
         #
-        if [[ "$owner" == "root" &&
+          if [[ "$owner" == "root" &&
               "$group" == "root" &&
-              ! "$mode" =~ [2367][2367]$ ]]; then
+              "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0022) == 0 )); then
             audit_pass "$path is owned by root:root with restricted write permissions."
         else
             #
@@ -628,8 +609,8 @@ audit_cron_permissions() {
                 failed=1
             fi
 
-            if [[ "$mode" =~ [2367]$ ]]; then
-                audit_fail "$path is writable by others."
+            if [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0022) != 0 )); then
+                audit_fail "$path is writable by group or others."
                 failed=1
             fi
         fi
@@ -708,9 +689,9 @@ audit_ssh_directory_permissions() {
         group="$(get_file_group /etc/ssh)"
         mode="$(get_file_mode /etc/ssh)"
 
-        if [[ "$owner" == "root" &&
+          if [[ "$owner" == "root" &&
               "$group" == "root" &&
-              ! "$mode" =~ [2367][2367]$ ]]; then
+              "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0022) == 0 )); then
             audit_pass "/etc/ssh has root ownership and restricted write permissions."
         else
             audit_fail "/etc/ssh permissions are ${owner}:${group} ${mode}."
@@ -722,9 +703,6 @@ audit_ssh_directory_permissions() {
     fi
 
     if [[ -d /etc/ssh/sshd_config.d ]]; then
-        chown root:root /etc/ssh/sshd_config.d 2>/dev/null || true
-        chmod go-w /etc/ssh/sshd_config.d 2>/dev/null || true
-
         while IFS= read -r -d '' file; do
             local owner group mode
 
@@ -733,8 +711,8 @@ audit_ssh_directory_permissions() {
             mode="$(get_file_mode "$file")"
 
             if [[ "$owner" == "root" &&
-                  "$group" == "root" &&
-                  ! "$mode" =~ [2367]$ ]]; then
+                "$group" == "root" &&
+                "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0022) == 0 )); then
                 audit_pass "$file has restricted permissions."
             else
                 audit_fail "$file has ${owner}:${group} ${mode}."
@@ -774,14 +752,17 @@ remediate_ssh_directory_permissions() {
 audit_section_06() {
     start_section "SECTION 06 - PERMISSIONS AUDIT"
 
-    audit_sensitive_file_permissions
-    audit_sudo_permissions
-    audit_world_writable_files
-    audit_temporary_directory_permissions
-    audit_cron_permissions
-    audit_ssh_directory_permissions
+    local failures=0
+
+    audit_sensitive_file_permissions || failures=$((failures + 1))
+    audit_sudo_permissions || failures=$((failures + 1))
+    audit_world_writable_files || failures=$((failures + 1))
+    audit_temporary_directory_permissions || failures=$((failures + 1))
+    audit_cron_permissions || failures=$((failures + 1))
+    audit_ssh_directory_permissions || failures=$((failures + 1))
 
     end_section
+    return "$failures"
 }
 
 ###############################################################################
@@ -791,63 +772,75 @@ audit_section_06() {
 remediate_section_06() {
     start_section "SECTION 06 - PERMISSIONS REMEDIATION"
 
+    local failures=0
+
     #
     # Sensitive system files.
     #
-    remediate_sensitive_file_permissions
+    remediate_sensitive_file_permissions || failures=$((failures + 1))
 
     #
     # Sudo configuration.
     #
-    remediate_sudo_permissions
+    remediate_sudo_permissions || failures=$((failures + 1))
 
     #
     # Temporary directories.
     #
-    remediate_temporary_directory_permissions
+    remediate_temporary_directory_permissions || failures=$((failures + 1))
 
     #
     # Cron configuration.
     #
-    remediate_cron_permissions
+    remediate_cron_permissions || failures=$((failures + 1))
 
     #
     # SSH configuration directories.
     #
-    remediate_ssh_directory_permissions
+    remediate_ssh_directory_permissions || failures=$((failures + 1))
 
     #
     # World-writable objects.
     #
-    remediate_world_writable_files
+    remediate_world_writable_files || failures=$((failures + 1))
 
     #
     # Run final audit after remediation.
     #
-    audit_world_writable_files
+    audit_world_writable_files || failures=$((failures + 1))
 
     end_section
+    return "$failures"
 }
 
 ###############################################################################
-# Dispatcher
+# Direct execution support
 ###############################################################################
 
-case "${1:-audit}" in
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 
-    audit)
-        require_root
-        audit_section_06
-        ;;
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-    remediate|fix|harden)
-        require_root
-        remediate_section_06
-        ;;
-
-    *)
-        echo "Usage: $0 {audit|remediate}"
+    if [[ -f "$SCRIPT_DIR/lib/common.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "$SCRIPT_DIR/lib/common.sh"
+    else
+        echo "ERROR: lib/common.sh not found"
         exit 1
-        ;;
+    fi
 
-esac
+    require_root
+
+    case "${1:-audit}" in
+        audit)
+            audit_section_06
+            ;;
+        remediate|fix|harden)
+            remediate_section_06
+            ;;
+        *)
+            echo "Usage: $0 {audit|remediate}"
+            exit 1
+            ;;
+    esac
+fi

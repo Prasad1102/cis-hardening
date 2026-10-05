@@ -27,11 +27,13 @@ TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 
 BACKUP_DIR="/root/cis-backup/$TIMESTAMP"
 LOG_DIR="/root/cis-logs/$TIMESTAMP"
+REMEDIATION_LOG="$LOG_DIR/remediation.log"
 
 CURRENT_SECTION=""
 
 mkdir -p "$BACKUP_DIR"
 mkdir -p "$LOG_DIR"
+touch "$REMEDIATION_LOG"
 
 
 # ------------------------------------------------------------
@@ -152,6 +154,34 @@ install_package() {
 }
 
 
+remove_package() {
+
+    local package="$1"
+
+    if [ -z "$package" ]; then
+        log_error "Package name is required for removal"
+        return 1
+    fi
+
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+        | grep -q "install ok installed"
+    then
+        log_info "Package is not installed: $package"
+        return 0
+    fi
+
+    log_info "Removing package: $package"
+
+    if DEBIAN_FRONTEND=noninteractive apt-get remove -y "$package"; then
+        log_success "Removed package: $package"
+        return 0
+    fi
+
+    log_error "Failed to remove package: $package"
+    return 1
+}
+
+
 # ------------------------------------------------------------
 # COMMAND EXECUTION
 # ------------------------------------------------------------
@@ -207,77 +237,30 @@ backup_file() {
         return 0
     fi
 
-    local destination="$BACKUP_DIR$(dirname "$file")"
+    local destination="$BACKUP_DIR$file"
+    local destination_dir
+    destination_dir="$(dirname "$destination")"
 
-    mkdir -p "$destination"
+    mkdir -p "$destination_dir" || return 1
 
-    cp -a "$file" "$destination/"
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+        log_info "Original backup already exists: $file"
+        return 0
+    fi
+
+    if ! cp -a "$file" "$destination"; then
+        log_error "Failed to back up: $file"
+        return 1
+    fi
 
     log_info "Backed up: $file"
+    return 0
 }
 
 
 # ------------------------------------------------------------
 # VERIFY FILE PERMISSIONS
 # ------------------------------------------------------------
-
-verify_file_permissions() {
-
-    local file="$1"
-    local expected_owner="$2"
-    local expected_mode="$3"
-
-    if [ ! -e "$file" ]; then
-        log_error "$file does not exist"
-        return 1
-    fi
-
-    local owner
-    local mode
-
-    owner="$(stat -c '%U:%G' "$file")"
-    mode="$(stat -c '%a' "$file")"
-
-    if [ "$owner" = "$expected_owner" ] &&
-       [ "$mode" = "$expected_mode" ]
-    then
-        log_success "$file ownership=$owner mode=$mode"
-        return 0
-    fi
-
-    log_error "$file ownership=$owner mode=$mode expected=$expected_owner/$expected_mode"
-
-    return 1
-}
-
-
-# ------------------------------------------------------------
-# SYSCTL
-# ------------------------------------------------------------
-
-set_sysctl_value() {
-
-    local key="$1"
-    local value="$2"
-
-    if [ "$MODE" = "audit" ]; then
-
-        local current
-
-        current="$(sysctl -n "$key" 2>/dev/null || echo "NOT_FOUND")"
-
-        if [ "$current" = "$value" ]; then
-            log_success "$key = $value"
-        else
-            log_error "$key = $current ; expected $value"
-        fi
-
-        return
-    fi
-
-    sysctl -w "$key=$value" >> "$LOG_DIR/sysctl.log" 2>&1
-}
-
 
 # ------------------------------------------------------------
 # SSH VALIDATION
@@ -388,10 +371,18 @@ get_sysctl_value() {
 
 check_expected_value() {
 
- local actual="${1:-}"
- local expected="${2:-}"
+ local control_id="$1"
+ local setting="$2"
+ local actual="${3:-}"
+ local expected="${4:-}"
 
- [[ "$actual" == "$expected" ]]
+ if [[ "$actual" == "$expected" ]]; then
+     audit_pass "$control_id" "$setting=$actual"
+     return 0
+ fi
+
+ audit_fail "$control_id" "$setting=$actual; expected $expected"
+ return 1
 }
 
 
@@ -418,29 +409,41 @@ package_installed() {
 set_file_permissions() {
 
  local file="${1:-}"
- local mode="${2:-}"
+ local owner="${2:-}"
+ local group="${3:-}"
+ local mode="${4:-}"
 
- if [[ -z "$file" || -z "$mode" ]]; then
+ if [[ -z "$file" || -z "$owner" || -z "$group" || -z "$mode" ]]; then
  return 1
  fi
 
- chmod "$mode" "$file"
+ chown "$owner:$group" "$file" && chmod "$mode" "$file"
 }
 
 
 verify_file_permissions() {
 
  local file="${1:-}"
- local expected_mode="${2:-}"
+ local expected_owner="${2:-}"
+ local expected_group="${3:-}"
+ local expected_mode="${4:-}"
 
- if [[ ! -e "$file" ]]; then
+ if [[ ! -e "$file" || -z "$expected_owner" || -z "$expected_group" || -z "$expected_mode" ]]; then
  return 1
  fi
+
+ local actual_owner
+ actual_owner="$(stat -c '%U' "$file" 2>/dev/null)" || return 1
+
+ local actual_group
+ actual_group="$(stat -c '%G' "$file" 2>/dev/null)" || return 1
 
  local actual_mode
  actual_mode="$(stat -c '%a' "$file" 2>/dev/null)" || return 1
 
- [[ "$actual_mode" == "$expected_mode" ]]
+ [[ "$actual_owner" == "$expected_owner" &&
+    "$actual_group" == "$expected_group" &&
+    "$actual_mode" == "$expected_mode" ]]
 }
 
 
@@ -453,7 +456,7 @@ set_sysctl_value() {
  return 1
  fi
 
- sysctl -w "${key}=${value}" >/dev/null
+ sysctl -w "${key}=${value}" >> "$REMEDIATION_LOG" 2>&1
 }
 
 

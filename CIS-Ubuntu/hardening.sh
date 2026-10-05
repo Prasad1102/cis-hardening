@@ -188,10 +188,9 @@ check_os() {
     fi
 
     if [[ "${VERSION_ID:-}" != "24.04" ]]; then
-        printf '%b\n' "${YELLOW}WARNING: This script targets Ubuntu 24.04 LTS.${RESET}"
+        printf '%b\n' "${RED}ERROR: This script supports Ubuntu 24.04 LTS only.${RESET}"
         printf 'Detected version: %s\n' "${VERSION_ID:-unknown}"
-        printf '%s\n' "Continuing only because the operating system is Ubuntu."
-        printf '\n'
+        exit 1
     fi
 }
 
@@ -242,6 +241,8 @@ check_section_syntax() {
     printf '%b\n' "${BLUE}Checking shell syntax...${RESET}"
 
     local files=(
+        "${SCRIPT_DIR}/hardening.sh"
+        "$CONFIG_FILE"
         "$COMMON_LIB"
         "$SECTION_01"
         "$SECTION_02"
@@ -300,7 +301,7 @@ validate_configuration() {
     # Required numeric SSH values.
     #
     if [[ ! "${SSH_PORT:-}" =~ ^[0-9]+$ ]] ||
-       (( SSH_PORT < 1 || SSH_PORT > 65535 )); then
+    (( 10#$SSH_PORT < 1 || 10#$SSH_PORT > 65535 )); then
         printf '%b SSH_PORT is invalid: %s\n' \
             "${RED}[FAIL]${RESET}" "${SSH_PORT:-empty}"
         config_errors=1
@@ -354,6 +355,30 @@ validate_configuration() {
         FAILLOCK_DENY
         FAILLOCK_UNLOCK_TIME
         FAILLOCK_FAIL_INTERVAL
+        KERNEL_SUID_DUMPABLE
+        KERNEL_DMESG_RESTRICT
+        KERNEL_RANDOMIZE_VA_SPACE
+        NET_IPV4_ALL_SEND_REDIRECTS
+        NET_IPV4_DEFAULT_SEND_REDIRECTS
+        NET_IPV4_ALL_ACCEPT_REDIRECTS
+        NET_IPV4_DEFAULT_ACCEPT_REDIRECTS
+        NET_IPV4_ALL_SECURE_REDIRECTS
+        NET_IPV4_DEFAULT_SECURE_REDIRECTS
+        NET_IPV4_ALL_RP_FILTER
+        NET_IPV4_DEFAULT_RP_FILTER
+        NET_IPV4_ALL_ACCEPT_SOURCE_ROUTE
+        NET_IPV4_DEFAULT_ACCEPT_SOURCE_ROUTE
+        NET_IPV4_ALL_LOG_MARTIANS
+        NET_IPV4_DEFAULT_LOG_MARTIANS
+        NET_IPV4_TCP_SYNCOOKIES
+        NET_IPV6_ALL_FORWARDING
+        NET_IPV6_DEFAULT_FORWARDING
+        NET_IPV6_ALL_ACCEPT_REDIRECTS
+        NET_IPV6_DEFAULT_ACCEPT_REDIRECTS
+        NET_IPV6_ALL_ACCEPT_SOURCE_ROUTE
+        NET_IPV6_DEFAULT_ACCEPT_SOURCE_ROUTE
+        NET_IPV6_ALL_ACCEPT_RA
+        NET_IPV6_DEFAULT_ACCEPT_RA
     )
 
     local variable
@@ -371,6 +396,72 @@ validate_configuration() {
                 "$variable"
             config_errors=1
         fi
+    done
+
+    local boolean_vars=(
+        ENABLE_REMEDIATION
+        ENABLE_APPARMOR
+        APPARMOR_RESTRICT_UNPRIVILEGED_UNCONFINED
+        DISABLE_APPORT
+        DEV_SHM_NOEXEC
+        GRUB_PASSWORD_ENABLED
+        HARDEN_IPV6
+        INSTALL_AIDE
+        ENABLE_AIDE_TIMER
+        INSTALL_RSYSLOG
+        ENABLE_RSYSLOG
+        INSTALL_AUDITD
+        ENABLE_AUDITD
+        REQUIRE_SSH_UFW_RULE
+        DISABLE_ATM_MODULE
+        DISABLE_CAN_MODULE
+        DISABLE_SCTP_MODULE
+        DISABLE_TIPC_MODULE
+        REMOVE_TELNET_CLIENT
+        REMOVE_FTP_CLIENT
+        REMOTE_SYSLOG_ENABLED
+        ISSUE_ENABLED
+        ISSUE_NET_ENABLED
+        MOTD_ENABLED
+        PAM_MOTD_ENABLED
+    )
+
+    for variable in "${boolean_vars[@]}"; do
+        if [[ "${!variable:-}" == "yes" || "${!variable:-}" == "no" ]]; then
+            printf '%b %s=%s\n' "${GREEN}[OK]${RESET}" "$variable" "${!variable}"
+        else
+            printf '%b %s must be yes or no.\n' "${RED}[FAIL]${RESET}" "$variable"
+            config_errors=1
+        fi
+    done
+
+    if [[ "${DEFAULT_UMASK:-}" =~ ^[0-7]{3,4}$ ]]; then
+        printf '%b DEFAULT_UMASK=%s\n' "${GREEN}[OK]${RESET}" "$DEFAULT_UMASK"
+    else
+        printf '%b DEFAULT_UMASK is invalid.\n' "${RED}[FAIL]${RESET}"
+        config_errors=1
+    fi
+
+    if [[ "${REMOTE_SYSLOG_ENABLED:-no}" == "yes" &&
+          "${REMOTE_SYSLOG_PROTOCOL:-}" != "tcp" &&
+          "${REMOTE_SYSLOG_PROTOCOL:-}" != "udp" ]]; then
+        printf '%b REMOTE_SYSLOG_PROTOCOL must be tcp or udp.\n' "${RED}[FAIL]${RESET}"
+        config_errors=1
+    fi
+
+    local port_variable port_list configured_ports port_value
+    for port_variable in UFW_ALLOWED_TCP_PORTS UFW_ALLOWED_UDP_PORTS; do
+        port_list="${!port_variable:-}"
+        IFS=', ' read -ra configured_ports <<< "$port_list"
+        for port_value in "${configured_ports[@]}"; do
+            [[ -z "$port_value" ]] && continue
+            if [[ ! "$port_value" =~ ^[0-9]+$ ]] ||
+               (( 10#$port_value < 1 || 10#$port_value > 65535 )); then
+                printf '%b Invalid port in %s: %s\n' \
+                    "${RED}[FAIL]${RESET}" "$port_variable" "$port_value"
+                config_errors=1
+            fi
+        done
     done
 
     #
@@ -392,7 +483,7 @@ validate_configuration() {
     #
     if [[ "${REMOTE_SYSLOG_ENABLED:-no}" == "yes" ]]; then
 
-        if [[ -z "${REMOTE_SYSLOG_HOST:-}" ]]; then
+        if [[ ! "${REMOTE_SYSLOG_HOST:-}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
             printf '%b REMOTE_SYSLOG_HOST is required when remote logging is enabled.\n' \
                 "${RED}[FAIL]${RESET}"
             config_errors=1
@@ -402,8 +493,8 @@ validate_configuration() {
                 "$REMOTE_SYSLOG_HOST"
         fi
 
-        if [[ ! "${REMOTE_SYSLOG_PORT:-}" =~ ^[0-9]+$ ]] ||
-           (( REMOTE_SYSLOG_PORT < 1 || REMOTE_SYSLOG_PORT > 65535 )); then
+          if [[ ! "${REMOTE_SYSLOG_PORT:-}" =~ ^[0-9]+$ ]] ||
+              (( 10#$REMOTE_SYSLOG_PORT < 1 || 10#$REMOTE_SYSLOG_PORT > 65535 )); then
             printf '%b REMOTE_SYSLOG_PORT is invalid.\n' \
                 "${RED}[FAIL]${RESET}"
             config_errors=1
@@ -451,15 +542,14 @@ load_common_library() {
 # Section execution
 ###############################################################################
 
-##############################################################################
-# Section execution
-###############################################################################
-
 run_section() {
 
     local section_name="$1"
     local section_file="$2"
     local action="$3"
+
+    MODE="$action"
+    export MODE
 
     printf '\n'
     printf '%b\n' "${CYAN}============================================================${RESET}"
@@ -715,12 +805,21 @@ create_audit_summary() {
         echo "FAIL : ${AUDIT_FAIL_COUNT:-unknown}"
         echo "WARNING : ${AUDIT_WARNING_COUNT:-unknown}"
         echo "SKIP : ${AUDIT_SKIP_COUNT:-unknown}"
+        echo "Remediation failed : ${REMEDIATION_FAILED:-not applicable}"
+        echo "Validation failed : ${VALIDATION_FAILED:-not applicable}"
+        echo "Final audit dispatch failed : ${FINAL_AUDIT_FAILED:-not applicable}"
+        echo "Backup directory : ${BACKUP_DIR:-unknown}"
         echo
         echo "Run log : $RUN_LOG"
         echo
         echo "Detailed failures/warnings:"
         echo "------------------------------------------------"
-        grep -E '\[FAIL\]|\[WARNING\]|\[SKIP\]' "$RUN_LOG" 2>/dev/null || true
+        if [[ "${ACTION:-audit}" == "remediate" ]]; then
+            awk '/Running final verification audit/{in_final=1} in_final' "$RUN_LOG" \
+                | grep -E '\[FAIL\]|\[WARNING\]|\[SKIP\]' || true
+        else
+            grep -E '\[FAIL\]|\[WARNING\]|\[SKIP\]' "$RUN_LOG" 2>/dev/null || true
+        fi
     } > "$AUDIT_REPORT"
 
     chmod 640 "$AUDIT_REPORT"
@@ -755,7 +854,9 @@ preflight_checks() {
     # Confirm basic networking commands.
     #
     local commands=(
+        apt-get
         awk
+        dpkg-query
         sed
         grep
         find
@@ -766,6 +867,7 @@ preflight_checks() {
     )
 
     local command_name
+    local missing=0
 
     for command_name in "${commands[@]}"; do
         if command -v "$command_name" >/dev/null 2>&1; then
@@ -776,8 +878,14 @@ preflight_checks() {
             printf '%b %s\n' \
                 "${RED}[MISSING]${RESET}" \
                 "$command_name"
+            missing=1
         fi
     done
+
+    if [[ "$missing" -ne 0 ]]; then
+        log_error "Required system commands are missing."
+        return 1
+    fi
 
     #
     # Make sure /etc/ssh exists before SSH remediation.
@@ -805,6 +913,120 @@ show_backup_information() {
     fi
 }
 
+create_pre_remediation_backup() {
+
+    printf '%b\n' "${BLUE}Creating pre-remediation backups...${RESET}"
+
+    local files=(
+        /etc/fstab
+        /etc/default/grub
+        /etc/grub.d/01_cis_security
+        /etc/sysctl.d/99-cis-hardening.conf
+        /etc/modprobe.d/99-cis-hardening.conf
+        /etc/default/apport
+        /etc/issue
+        /etc/issue.net
+        /etc/motd
+        /etc/ssh/sshd_config
+        /etc/ssh/sshd_config.d
+        /etc/pam.d/common-auth
+        /etc/pam.d/common-account
+        /etc/pam.d/common-password
+        /etc/pam.d/common-session
+        /etc/security/pwquality.conf
+        /etc/security/faillock.conf
+        /etc/login.defs
+        /etc/profile.d/99-cis-umask.sh
+        /etc/passwd
+        /etc/group
+        /etc/shadow
+        /etc/gshadow
+        /etc/default/ufw
+        /etc/ufw
+        /etc/rsyslog.conf
+        /etc/rsyslog.d/99-cis-hardening.conf
+        /etc/audit/auditd.conf
+        /etc/audit/rules.d/99-cis-hardening.rules
+        /etc/crontab
+        /etc/cron.d
+        /etc/cron.hourly
+        /etc/cron.daily
+        /etc/cron.weekly
+        /etc/cron.monthly
+        /etc/cron.yearly
+        /etc/sudoers
+        /etc/sudoers.d
+    )
+
+    local file
+    local failed=0
+
+    for file in "${files[@]}"; do
+        backup_file "$file" || failed=1
+    done
+
+    if [[ "$failed" -ne 0 ]]; then
+        log_error "Pre-remediation backup failed; remediation will not run."
+        return 1
+    fi
+
+    show_backup_information
+    return 0
+}
+
+validate_remediation_changes() {
+
+    printf '%b\n' "${BLUE}Validating remediated configuration...${RESET}"
+
+    local files=(
+        "${SCRIPT_DIR}/hardening.sh"
+        "$CONFIG_FILE"
+        "$COMMON_LIB"
+        "$SECTION_01"
+        "$SECTION_02"
+        "$SECTION_03"
+        "$SECTION_04"
+        "$SECTION_05"
+        "$SECTION_06"
+    )
+    local file
+    local failed=0
+
+    for file in "${files[@]}"; do
+        if bash -n "$file"; then
+            printf '%b %s\n' "${GREEN}[OK]${RESET}" "$file"
+        else
+            printf '%b %s\n' "${RED}[FAIL]${RESET}" "$file"
+            failed=1
+        fi
+    done
+
+    if command -v sshd >/dev/null 2>&1 && ! sshd -t; then
+        log_error "sshd configuration validation failed"
+        failed=1
+    fi
+
+    if command -v rsyslogd >/dev/null 2>&1 &&
+       ! rsyslogd -N1 >/dev/null 2>"$LOG_DIR/rsyslog-validation.log"; then
+        log_error "rsyslog configuration validation failed"
+        failed=1
+    fi
+
+    if command -v visudo >/dev/null 2>&1 &&
+       ! visudo -c -f /etc/sudoers >/dev/null 2>&1; then
+        log_error "sudo configuration validation failed"
+        failed=1
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        printf '%b\n' "${GREEN}Configuration validation passed.${RESET}"
+        return 0
+    fi
+
+    log_error "One or more post-remediation validations failed."
+    return 1
+}
+
 ###############################################################################
 # Final status
 ###############################################################################
@@ -822,10 +1044,10 @@ print_final_status() {
     printf 'Log : %s\n' "$RUN_LOG"
     printf 'Report : %s\n' "$AUDIT_REPORT"
 
-    if [[ "${AUDIT_FAIL_COUNT:-0}" -gt 0 ]]; then
+    if [[ "${AUDIT_FAIL_COUNT:-0}" -gt 0 || "${RUN_FAILED:-0}" -gt 0 ]]; then
 
         printf '\n'
-        printf '%b\n' "${RED}Result: FAILURES REMAIN${RESET}"
+        printf '%b\n' "${RED}Result: AUDIT OR EXECUTION FAILURES REMAIN${RESET}"
         printf '%s\n' "Review the audit report and rerun:"
         printf '%s\n' " sudo ./hardening.sh audit"
 
@@ -861,6 +1083,7 @@ run_audit() {
     AUDIT_FAIL_COUNT=0
     AUDIT_WARNING_COUNT=0
     AUDIT_SKIP_COUNT=0
+    local dispatch_failed=0
 
     #
     # Run all six sections in CIS order.
@@ -868,36 +1091,43 @@ run_audit() {
     run_section \
         "01 - Filesystem and Boot" \
         "$SECTION_01" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     run_section \
         "02 - Services and Network" \
         "$SECTION_02" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     run_section \
         "03 - Firewall and SSH" \
         "$SECTION_03" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     run_section \
         "04 - PAM and Accounts" \
         "$SECTION_04" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     run_section \
         "05 - Logging and Audit" \
         "$SECTION_05" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     run_section \
         "06 - Permissions" \
         "$SECTION_06" \
-        "audit"
+        "audit" || dispatch_failed=1
 
     create_audit_summary
 
     local audit_status=$?
+
+    if [[ "$dispatch_failed" -ne 0 ]]; then
+        audit_status=1
+        RUN_FAILED=1
+    else
+        RUN_FAILED=0
+    fi
 
     print_final_status
 
@@ -920,6 +1150,7 @@ run_remediation() {
     AUDIT_FAIL_COUNT=0
     AUDIT_WARNING_COUNT=0
     AUDIT_SKIP_COUNT=0
+    local final_audit_failed=0
 
     ###########################################################################
     # Initial audit
@@ -964,22 +1195,12 @@ run_remediation() {
 
     printf '\n'
     printf '%b\n' "${YELLOW}The remediation mode will modify system configuration.${RESET}"
-    printf '%s\n' "Backups should be created by the individual remediation functions."
+    printf '%s\n' "A pre-remediation backup will be created before any changes."
     printf '\n'
 
-    if [[ "${NON_INTERACTIVE:-no}" != "yes" ]]; then
-
-        read -r -p "Continue with CIS remediation? [y/N]: " confirmation
-
-        case "${confirmation,,}" in
-            y|yes)
-                printf '\n'
-                ;;
-            *)
-                printf '%b\n' "${YELLOW}Remediation cancelled by user.${RESET}"
-                return 0
-                ;;
-        esac
+    if [[ "${ENABLE_REMEDIATION:-no}" != "yes" ]]; then
+        log_error "Remediation is disabled by ENABLE_REMEDIATION in cis.conf."
+        return 1
     fi
 
     ###########################################################################
@@ -991,10 +1212,13 @@ run_remediation() {
 
     local remediation_failed=0
 
-    run_section \
-        "01 - Filesystem and Boot - Remediation" \
-        "$SECTION_01" \
-        "remediate" || remediation_failed=1
+    if ! create_pre_remediation_backup; then
+        remediation_failed=1
+    else
+        run_section \
+            "01 - Filesystem and Boot - Remediation" \
+            "$SECTION_01" \
+            "remediate" || remediation_failed=1
 
     run_section \
         "02 - Services and Network - Remediation" \
@@ -1020,6 +1244,10 @@ run_remediation() {
         "06 - Permissions - Remediation" \
         "$SECTION_06" \
         "remediate" || remediation_failed=1
+    fi
+
+    local validation_failed=0
+    validate_remediation_changes || validation_failed=1
 
     ###########################################################################
     # Final audit
@@ -1042,42 +1270,51 @@ run_remediation() {
     run_section \
         "01 - Filesystem and Boot - Final Audit" \
         "$SECTION_01" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     run_section \
         "02 - Services and Network - Final Audit" \
         "$SECTION_02" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     run_section \
         "03 - Firewall and SSH - Final Audit" \
         "$SECTION_03" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     run_section \
         "04 - PAM and Accounts - Final Audit" \
         "$SECTION_04" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     run_section \
         "05 - Logging and Audit - Final Audit" \
         "$SECTION_05" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     run_section \
         "06 - Permissions - Final Audit" \
         "$SECTION_06" \
-        "audit"
+        "audit" || final_audit_failed=1
 
     ###########################################################################
     # Report
     ###########################################################################
 
+    REMEDIATION_FAILED="$remediation_failed"
+    VALIDATION_FAILED="$validation_failed"
+    FINAL_AUDIT_FAILED="$final_audit_failed"
+
     create_audit_summary
     local final_status=$?
 
-    if [[ "$remediation_failed" -ne 0 ]]; then
+    if [[ "$remediation_failed" -ne 0 || "$validation_failed" -ne 0 || "$final_audit_failed" -ne 0 ]]; then
         final_status=1
+    fi
+
+    RUN_FAILED=0
+    if [[ "$final_status" -ne 0 ]]; then
+        RUN_FAILED=1
     fi
 
     print_final_status
@@ -1092,6 +1329,7 @@ run_remediation() {
 main() {
 
     local action="${1:-}"
+    ACTION="$action"
 
     case "$action" in
         audit|remediate)
@@ -1155,7 +1393,7 @@ main() {
     #
     # Basic system checks.
     #
-    preflight_checks
+    preflight_checks || return 1
 
     printf '%b\n' "${BLUE}Action: $action${RESET}"
     printf '\n'

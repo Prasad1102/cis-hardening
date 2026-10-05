@@ -66,6 +66,7 @@ pam_append_setting() {
 
 audit_pam_faillock() {
     local auth_ok=0
+    local authsucc_ok=0
     local account_ok=0
 
     # common-auth must contain both preauth and authfail.
@@ -76,10 +77,15 @@ audit_pam_faillock() {
             auth_ok=$((auth_ok + 1))
         fi
 
-        if grep -Eq '^[[:space:]]*auth[[:space:]]+required[[:space:]]+pam_faillock\.so.*authfail' \
+            if grep -Eq '^[[:space:]]*auth[[:space:]]+.*pam_faillock\.so.*authfail' \
             "$PAM_AUTH"; then
             auth_ok=$((auth_ok + 1))
         fi
+
+            if grep -Eq '^[[:space:]]*auth[[:space:]]+.*pam_faillock\.so.*authsucc' \
+                "$PAM_AUTH"; then
+                authsucc_ok=1
+            fi
     fi
 
     # common-account must contain account pam_faillock.
@@ -90,11 +96,11 @@ audit_pam_faillock() {
         fi
     fi
 
-    if [[ "$auth_ok" -eq 2 && "$account_ok" -eq 1 ]]; then
+    if [[ "$auth_ok" -eq 2 && "$authsucc_ok" -eq 1 && "$account_ok" -eq 1 ]]; then
         audit_pass \
             "5.3.2.2" \
             "PAM faillock" \
-            "pam_faillock preauth, authfail and account rules are configured"
+            "pam_faillock preauth, authfail, authsucc and account rules are configured"
         return 0
     fi
 
@@ -104,6 +110,48 @@ audit_pam_faillock() {
         "Required pam_faillock rules are missing"
 
     return 1
+}
+
+
+audit_pam_pwquality_module() {
+    if ! package_installed libpam-pwquality; then
+        audit_fail \
+            "5.3.3.2" \
+            "PAM password quality module" \
+            "libpam-pwquality is not installed"
+        return 1
+    fi
+
+    if ! grep -Eq '^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so' "$PAM_PASSWORD"; then
+        audit_fail \
+            "5.3.3.2" \
+            "PAM password quality module" \
+            "pam_pwquality.so is not enabled in $PAM_PASSWORD"
+        return 1
+    fi
+
+    audit_pass \
+        "5.3.3.2" \
+        "PAM password quality module" \
+        "libpam-pwquality is installed and enabled"
+    return 0
+}
+
+
+remediate_pam_pwquality_module() {
+    if ! install_package libpam-pwquality; then
+        return 1
+    fi
+
+    if ! grep -Eq '^[[:space:]]*password[[:space:]]+.*pam_pwquality\.so' "$PAM_PASSWORD"; then
+        if ! command_exists pam-auth-update ||
+           ! pam-auth-update --enable pwquality; then
+            log_error "Could not enable the pwquality PAM profile"
+            return 1
+        fi
+    fi
+
+    audit_pam_pwquality_module
 }
 
 
@@ -119,6 +167,7 @@ remediate_pam_faillock() {
 
     pam_backup_file "$PAM_AUTH"
     pam_backup_file "$PAM_ACCOUNT"
+    backup_file "$FAILLock"
 
     # Remove old manually-managed faillock lines first.
     pam_remove_setting_lines \
@@ -148,22 +197,23 @@ EOF
     chown root:root "$FAILLock"
     chmod 644 "$FAILLock"
 
-    # IMPORTANT:
-    # pam_faillock preauth must be before pam_unix authentication.
+    # Keep the failure rule after pam_unix and reset the tally after success.
     local auth_tmp
     auth_tmp="$(mktemp)"
 
     awk '
-        BEGIN { inserted_pre = 0; inserted_fail = 0 }
+        BEGIN { inserted_rules = 0 }
 
         /^[[:space:]]*auth[[:space:]]+.*pam_faillock\.so/ {
             next
         }
 
-        /^[[:space:]]*auth[[:space:]]+.*pam_unix\.so/ && inserted_pre == 0 {
+        /^[[:space:]]*auth[[:space:]]+.*pam_unix\.so/ && inserted_rules == 0 {
             print "auth required pam_faillock.so preauth"
-            inserted_pre = 1
             print
+            print "auth [default=die] pam_faillock.so authfail"
+            print "auth sufficient pam_faillock.so authsucc"
+            inserted_rules = 1
             next
         }
 
@@ -171,12 +221,12 @@ EOF
             print
         }
 
-        END {
-            if (inserted_fail == 0) {
-                print "auth [default=die] pam_faillock.so authfail"
-            }
-        }
-    ' "$PAM_AUTH" > "$auth_tmp"
+        END { if (inserted_rules == 0) exit 1 }
+    ' "$PAM_AUTH" > "$auth_tmp" || {
+        rm -f "$auth_tmp"
+        log_error "Could not insert faillock rules around pam_unix"
+        return 1
+    }
 
     mv "$auth_tmp" "$PAM_AUTH"
 
@@ -315,6 +365,24 @@ audit_faillock_unlock_time() {
         "PAM account unlock time" \
         "Expected unlock_time=$expected, found ${actual:-unset}"
 
+    return 1
+}
+
+
+audit_faillock_fail_interval() {
+    local expected="${FAILLOCK_FAIL_INTERVAL:-900}"
+    local actual=""
+
+    if [[ -f "$FAILLock" ]]; then
+        actual="$(awk -F '=' '/^[[:space:]]*fail_interval[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$FAILLock")"
+    fi
+
+    if [[ "$actual" == "$expected" ]]; then
+        audit_pass "5.3.3.1.3" "PAM failure interval" "fail_interval=$actual"
+        return 0
+    fi
+
+    audit_fail "5.3.3.1.3" "PAM failure interval" "Expected fail_interval=$expected, found ${actual:-unset}"
     return 1
 }
 
@@ -486,25 +554,25 @@ audit_pwquality_complexity() {
         "5.3.3.2.3" \
         "Password uppercase requirement" \
         "ucredit" \
-        "-${PASSWORD_UPPER:-1}" || failures=$((failures + 1))
+            "-${PASSWORD_MIN_UPPER:-1}" || failures=$((failures + 1))
 
     audit_pwquality_numeric \
         "5.3.3.2.3" \
         "Password lowercase requirement" \
         "lcredit" \
-        "-${PASSWORD_LOWER:-1}" || failures=$((failures + 1))
+            "-${PASSWORD_MIN_LOWER:-1}" || failures=$((failures + 1))
 
     audit_pwquality_numeric \
         "5.3.3.2.3" \
         "Password digit requirement" \
         "dcredit" \
-        "-${PASSWORD_DIGITS:-1}" || failures=$((failures + 1))
+            "-${PASSWORD_MIN_DIGITS:-1}" || failures=$((failures + 1))
 
     audit_pwquality_numeric \
         "5.3.3.2.3" \
         "Password other-character requirement" \
         "ocredit" \
-        "-${PASSWORD_OTHER:-1}" || failures=$((failures + 1))
+            "-${PASSWORD_MIN_OTHER:-1}" || failures=$((failures + 1))
 
     return "$failures"
 }
@@ -513,19 +581,19 @@ audit_pwquality_complexity() {
 remediate_pwquality_complexity() {
     set_pwquality_value \
         "ucredit" \
-        "-${PASSWORD_UPPER:-1}"
+        "-${PASSWORD_MIN_UPPER:-1}"
 
     set_pwquality_value \
         "lcredit" \
-        "-${PASSWORD_LOWER:-1}"
+        "-${PASSWORD_MIN_LOWER:-1}"
 
     set_pwquality_value \
         "dcredit" \
-        "-${PASSWORD_DIGITS:-1}"
+        "-${PASSWORD_MIN_DIGITS:-1}"
 
     set_pwquality_value \
         "ocredit" \
-        "-${PASSWORD_OTHER:-1}"
+        "-${PASSWORD_MIN_OTHER:-1}"
 
     audit_pass \
         "5.3.3.2.3" \
@@ -657,19 +725,19 @@ remediate_root_password_quality() {
 
     set_pwquality_value \
         "ucredit" \
-        "-${PASSWORD_UPPER:-1}"
+        "-${PASSWORD_MIN_UPPER:-1}"
 
     set_pwquality_value \
         "lcredit" \
-        "-${PASSWORD_LOWER:-1}"
+        "-${PASSWORD_MIN_LOWER:-1}"
 
     set_pwquality_value \
         "dcredit" \
-        "-${PASSWORD_DIGITS:-1}"
+        "-${PASSWORD_MIN_DIGITS:-1}"
 
     set_pwquality_value \
         "ocredit" \
-        "-${PASSWORD_OTHER:-1}"
+        "-${PASSWORD_MIN_OTHER:-1}"
 
     audit_pass \
         "5.3.3.2.8" \
@@ -696,7 +764,7 @@ audit_root_password_history() {
     fi
 
     if grep -Eq \
-        "^[[:space:]]*password[[:space:]]+.*pam_pwhistory\.so.*remember=${expected}" \
+        "^[[:space:]]*password[[:space:]]+.*pam_pwhistory\.so.*remember=${expected}.*enforce_for_root|^[[:space:]]*password[[:space:]]+.*pam_pwhistory\.so.*enforce_for_root.*remember=${expected}" \
         "$PAM_PASSWORD"; then
 
         audit_pass \
@@ -733,7 +801,7 @@ remediate_root_password_history() {
 
     awk '
         /^[[:space:]]*password[[:space:]]+.*pam_unix\.so/ && inserted == 0 {
-            print "password required pam_pwhistory.so use_authtok remember='"${PASSWORD_HISTORY:-24}"'"
+                print "password required pam_pwhistory.so use_authtok remember='"${PASSWORD_HISTORY:-24}"' enforce_for_root"
             inserted = 1
             print
             next
@@ -742,7 +810,12 @@ remediate_root_password_history() {
         {
             print
         }
-    ' "$PAM_PASSWORD" > "$tmp"
+        END { if (inserted == 0) exit 1 }
+    ' "$PAM_PASSWORD" > "$tmp" || {
+        rm -f "$tmp"
+        log_error "Could not place pam_pwhistory before pam_unix"
+        return 1
+    }
 
     mv "$tmp" "$PAM_PASSWORD"
 
@@ -1076,11 +1149,11 @@ audit_password_inactive_lock() {
         inactive="$(chage -l "$username" 2>/dev/null |
             awk -F': ' '/Password inactive/ {print $2}' || true)"
 
-        if [[ "$inactive" =~ never|Never ]]; then
+            if [[ "$inactive" =~ [Nn]ever || ! "$inactive" =~ ^${expected}([[:space:]]|$) ]]; then
             audit_fail \
                 "5.4.1.5" \
                 "Inactive password lock" \
-                "$username has no inactive password lock"
+                    "$username has inactive password setting '${inactive:-unknown}', expected $expected days"
             failures=$((failures + 1))
         fi
 
@@ -1134,7 +1207,7 @@ remediate_password_inactive_lock() {
 audit_root_path() {
     local root_path
 
-    root_path="$(sudo -H -u root env 'PATH' 2>/dev/null || true)"
+    root_path="$(sudo -H -u root sh -c 'printf "%s" "$PATH"' 2>/dev/null || true)"
 
     if [[ -z "$root_path" ]]; then
         root_path="${PATH:-}"
@@ -1528,9 +1601,11 @@ section_04_audit() {
     local failures=0
 
     audit_pam_faillock || failures=$((failures + 1))
+    audit_pam_pwquality_module || failures=$((failures + 1))
 
     audit_faillock_deny || failures=$((failures + 1))
     audit_faillock_unlock_time || failures=$((failures + 1))
+    audit_faillock_fail_interval || failures=$((failures + 1))
 
     audit_pwquality_difok || failures=$((failures + 1))
     audit_pwquality_minlen || failures=$((failures + 1))
@@ -1571,6 +1646,7 @@ section_04_remediate() {
     local failures=0
 
     remediate_pam_faillock || failures=$((failures + 1))
+    remediate_pam_pwquality_module || failures=$((failures + 1))
 
     remediate_faillock_deny || failures=$((failures + 1))
     remediate_faillock_unlock_time || failures=$((failures + 1))

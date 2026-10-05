@@ -11,11 +11,9 @@
 #
 # 1.1.2.1.1 /tmp filesystem
 # 1.1.2.2.4 /dev/shm noexec
-# 1.4.1 Bootloader password
 # 1.5.4 fs.suid_dumpable
 # 1.5.5 kernel.dmesg_restrict
 # 1.5.7 Automatic Error Reporting
-# 1.5.9 kernel.randomize_va_space
 # 1.3.1.4 AppArmor restriction
 # 1.6.1 /etc/motd
 # 1.6.3 /etc/issue.net
@@ -38,21 +36,22 @@
 # ============================================================
 
 section_01_filesystem_boot() {
-
     start_section "01 - FILESYSTEM / BOOT / KERNEL / APPARMOR"
+
+    local status=0
 
     case "${MODE:-audit}" in
 
         audit)
-            audit_01_filesystem_boot
+            audit_01_filesystem_boot || status=$?
             ;;
 
         remediate)
-            remediate_01_filesystem_boot
+            remediate_01_filesystem_boot || status=$?
             ;;
 
         verify)
-            audit_01_filesystem_boot
+            audit_01_filesystem_boot || status=$?
             ;;
 
         *)
@@ -64,6 +63,7 @@ section_01_filesystem_boot() {
     esac
 
     end_section
+    return "$status"
 }
 
 
@@ -97,14 +97,16 @@ remediate_01_filesystem_boot() {
 
     log_info "Starting filesystem and boot remediation."
 
-    remediate_dev_shm
-    remediate_grub_password
-    remediate_kernel_settings
-    remediate_apparmor
-    remediate_apport
-    remediate_banners
-    remediate_pam_motd
-    remediate_aide
+    local failed=0
+
+    remediate_dev_shm || failed=1
+    remediate_grub_password || failed=1
+    remediate_kernel_settings || failed=1
+    remediate_apparmor || failed=1
+    remediate_apport || failed=1
+    remediate_banners || failed=1
+    remediate_pam_motd || failed=1
+    remediate_aide || failed=1
 
     #
     # /tmp is deliberately not automatically repartitioned.
@@ -117,7 +119,7 @@ remediate_01_filesystem_boot() {
         log_warning \
             "Review the /tmp filesystem requirement before continuing."
 
-        remediate_tmp_filesystem
+        remediate_tmp_filesystem || failed=1
 
     else
 
@@ -129,6 +131,7 @@ remediate_01_filesystem_boot() {
     fi
 
     log_info "Filesystem and boot remediation completed."
+    return "$failed"
 }
 
 
@@ -233,37 +236,23 @@ audit_dev_shm() {
     local control_id="1.1.2.2.4"
 
     if ! mountpoint -q /dev/shm; then
-
-        audit_fail \
-            "$control_id" \
-            "/dev/shm is not a mount point"
-
+        audit_fail "$control_id" "/dev/shm is not a mount point"
         return 1
     fi
 
+    local active_options
+    active_options="$(get_mount_options /dev/shm)"
 
-    local options
+    local persistent_options
+    persistent_options="$(awk '$1 !~ /^#/ && $2 == "/dev/shm" {print $4; exit}' /etc/fstab 2>/dev/null)"
 
-    options="$(get_mount_options /dev/shm)"
-
-
-    if printf '%s\n' "$options" \
-        | tr ',' '\n' \
-        | grep -qx "noexec"
-    then
-
-        audit_pass \
-            "$control_id" \
-            "/dev/shm has noexec"
-
+    if printf '%s\n' "$active_options" | tr ',' '\n' | grep -qx "noexec" &&
+       printf '%s\n' "$persistent_options" | tr ',' '\n' | grep -qx "noexec"; then
+        audit_pass "$control_id" "/dev/shm has noexec at runtime and in /etc/fstab"
         return 0
     fi
 
-
-    audit_fail \
-        "$control_id" \
-        "/dev/shm does not have noexec"
-
+    audit_fail "$control_id" "/dev/shm noexec is missing at runtime or in /etc/fstab"
     return 1
 }
 
@@ -271,68 +260,58 @@ audit_dev_shm() {
 remediate_dev_shm() {
 
     if [ "${DEV_SHM_NOEXEC:-yes}" != "yes" ]; then
-
-        log_info \
-            "DEV_SHM_NOEXEC is disabled."
-
+        log_info "DEV_SHM_NOEXEC is disabled."
         return 0
     fi
 
-
     local fstab="/etc/fstab"
+    backup_file "$fstab" || return 1
 
-    backup_file "$fstab"
+    local fstab_tmp
+    fstab_tmp="$(mktemp "${fstab}.XXXXXX")" || return 1
 
-
-    #
-    # Do not create duplicate /dev/shm entries.
-    #
-
-    if grep -Eq \
-        '^[[:space:]]*[^#]+[[:space:]]+/dev/shm[[:space:]]+' \
-        "$fstab"
-    then
-
-        log_info \
-            "/dev/shm entry already exists in /etc/fstab."
-
-    else
-
-        printf '%s\n' \
-            "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0" \
-            >> "$fstab"
-
-        log_success \
-            "Added /dev/shm mount configuration."
-    fi
-
-
-    #
-    # Apply the mount options immediately.
-    #
-
-    if mountpoint -q /dev/shm; then
-
-        if mount -o remount,nodev,nosuid,noexec /dev/shm \
-            >> "$REMEDIATION_LOG" 2>&1
-        then
-
-            log_success \
-                "/dev/shm remounted with nodev,nosuid,noexec"
-
-            return 0
-        fi
-
-        log_error \
-            "Unable to remount /dev/shm."
-
+    if ! awk '
+        BEGIN { found = 0 }
+        $1 !~ /^#/ && $2 == "/dev/shm" {
+            if (!found) {
+                $4 = "defaults,nodev,nosuid,noexec"
+                print
+                found = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!found) {
+                print "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0"
+            }
+        }
+    ' "$fstab" > "$fstab_tmp"; then
+        rm -f "$fstab_tmp"
+        log_error "Could not prepare persistent /dev/shm mount options."
         return 1
     fi
 
+    if ! chown --reference="$fstab" "$fstab_tmp" ||
+       ! chmod --reference="$fstab" "$fstab_tmp" ||
+       ! mv -f "$fstab_tmp" "$fstab"; then
+        rm -f "$fstab_tmp"
+        log_error "Could not update $fstab."
+        return 1
+    fi
 
-    log_warning \
-        "/dev/shm is not currently mounted; reboot/mount is required."
+    if mountpoint -q /dev/shm; then
+        if mount -o remount,nodev,nosuid,noexec /dev/shm \
+            >> "$REMEDIATION_LOG" 2>&1; then
+            log_success "/dev/shm remounted with nodev,nosuid,noexec"
+            return 0
+        fi
 
+        log_error "Unable to remount /dev/shm."
+        return 1
+    fi
+
+    log_warning "/dev/shm is not currently mounted; reboot/mount is required."
     return 0
 }
 
@@ -468,9 +447,7 @@ EOF
 
     chmod 700 "$grub_custom"
 
-
     if update-grub >> "$REMEDIATION_LOG" 2>&1; then
-
         log_success \
             "GRUB configuration regenerated."
 
@@ -498,57 +475,31 @@ audit_kernel_settings() {
 
     local failed=0
 
-
-    #
-    # 1.5.4
-    #
-
     if ! check_expected_value \
         "1.5.4" \
         "fs.suid_dumpable" \
         "$(get_sysctl_value fs.suid_dumpable)" \
-        "${KERNEL_SUID_DUMPABLE}"
-    then
-
+        "${KERNEL_SUID_DUMPABLE}"; then
         failed=1
     fi
-
-
-    #
-    # 1.5.5
-    #
 
     if ! check_expected_value \
         "1.5.5" \
         "kernel.dmesg_restrict" \
         "$(get_sysctl_value kernel.dmesg_restrict)" \
-        "${KERNEL_DMESG_RESTRICT}"
-    then
-
+        "${KERNEL_DMESG_RESTRICT}"; then
         failed=1
     fi
-
-
-    #
-    # 1.5.9
-    #
 
     if ! check_expected_value \
         "1.5.9" \
         "kernel.randomize_va_space" \
         "$(get_sysctl_value kernel.randomize_va_space)" \
-        "${KERNEL_RANDOMIZE_VA_SPACE}"
-    then
-
+        "${KERNEL_RANDOMIZE_VA_SPACE}"; then
         failed=1
     fi
 
-
-    if [ "$failed" -eq 0 ]; then
-        return 0
-    fi
-
-    return 1
+    return "$failed"
 }
 
 
@@ -693,7 +644,7 @@ audit_apparmor() {
 
 remediate_apparmor() {
 
-    if [ "${APPARMOR_ENABLED:-yes}" != "yes" ]; then
+    if [ "${ENABLE_APPARMOR:-yes}" != "yes" ]; then
 
         log_warning \
             "AppArmor remediation disabled in cis.conf."
@@ -1164,7 +1115,7 @@ remediate_banners() {
     # SSH Banner configuration.
     #
 
-    local ssh_dropin="${SSH_CIS_CONFIG_FILE:-/etc/ssh/sshd_config.d/99-cis-hardening.conf}"
+    local ssh_dropin="${SSH_CIS_CONFIG_FILE:-/etc/ssh/sshd_config.d/00-cis-hardening.conf}"
 
 
     mkdir -p "$(dirname "$ssh_dropin")"
@@ -1179,13 +1130,13 @@ remediate_banners() {
 
         sed -i \
             -E \
-            "s|^[[:space:]]*Banner[[:space:]]+.*|Banner ${ISSUE_NET_FILE:-/etc/issue.net}|" \
+            "s|^[[:space:]]*Banner[[:space:]]+.*|Banner ${SSH_BANNER_FILE:-/etc/issue.net}|" \
             "$ssh_dropin"
 
     else
 
         printf '%s\n' \
-            "Banner ${ISSUE_NET_FILE:-/etc/issue.net}" \
+            "Banner ${SSH_BANNER_FILE:-/etc/issue.net}" \
             >> "$ssh_dropin"
     fi
 
@@ -1196,7 +1147,7 @@ remediate_banners() {
 
     if validate_sshd; then
 
-        safe_reload_sshd
+        safe_reload_sshd || return 1
 
     else
 
@@ -1363,11 +1314,6 @@ audit_aide() {
     fi
 
 
-    if [ -f /var/lib/aide/aide.db.new ]; then
-        database_found="yes"
-    fi
-
-
     if [ "$database_found" = "yes" ]; then
 
         audit_pass \
@@ -1376,9 +1322,11 @@ audit_aide() {
 
     else
 
-        audit_warning \
+        audit_fail \
             "$control_id" \
-            "AIDE is installed but an AIDE database was not found"
+            "AIDE is installed but its active database /var/lib/aide/aide.db is missing"
+
+        return 1
 
     fi
 
@@ -1463,6 +1411,12 @@ remediate_aide() {
                 "Initializing AIDE database."
 
             if aideinit >> "$REMEDIATION_LOG" 2>&1; then
+
+                if [ -f /var/lib/aide/aide.db.new ]; then
+                    install -o root -g root -m 600 \
+                        /var/lib/aide/aide.db.new \
+                        /var/lib/aide/aide.db || return 1
+                fi
 
                 log_success \
                     "AIDE database initialization completed."

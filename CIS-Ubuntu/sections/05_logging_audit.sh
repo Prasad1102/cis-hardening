@@ -54,6 +54,14 @@ service_active() {
 # ------------------------------------------------------------
 
 audit_rsyslog_service() {
+    if [[ "${INSTALL_RSYSLOG:-yes}" != "yes" || "${ENABLE_RSYSLOG:-yes}" != "yes" ]]; then
+        audit_skip \
+            "6.1.2.4" \
+            "rsyslog logging" \
+            "rsyslog installation or service activation is disabled in cis.conf"
+        return 0
+    fi
+
     if ! command_exists rsyslogd; then
         audit_fail \
             "6.1.2.4" \
@@ -100,6 +108,11 @@ audit_rsyslog_service() {
 
 
 remediate_rsyslog_service() {
+    if [[ "${INSTALL_RSYSLOG:-yes}" != "yes" || "${ENABLE_RSYSLOG:-yes}" != "yes" ]]; then
+        log_warning "rsyslog installation or service activation is disabled in cis.conf"
+        return 0
+    fi
+
     if ! command_exists rsyslogd; then
         log_info "Installing rsyslog"
 
@@ -164,9 +177,10 @@ audit_rsyslog_facilities() {
 
     for facility in "${!expected_rules[@]}"; do
         destination="${expected_rules[$facility]}"
+        local escaped_destination="${destination//\//\\/}"
 
         if grep -REq \
-            "^[[:space:]]*${facility}\.\*+[[:space:]]+${destination//\//\\/}([[:space:]]|$)" \
+            "^[[:space:]]*([^#[:space:]]+,)?${facility}\.\*[[:space:]]+-?${escaped_destination}([[:space:]]|$)" \
             /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null; then
 
             audit_pass \
@@ -243,6 +257,8 @@ EOF
 audit_remote_rsyslog() {
     local enabled="${REMOTE_SYSLOG_ENABLED:-no}"
     local host="${REMOTE_SYSLOG_HOST:-}"
+    local port="${REMOTE_SYSLOG_PORT:-514}"
+    local protocol="${REMOTE_SYSLOG_PROTOCOL:-udp}"
 
     if [[ "${enabled,,}" != "yes" &&
           "${enabled,,}" != "true" &&
@@ -265,9 +281,12 @@ audit_remote_rsyslog() {
         return 1
     fi
 
-    if grep -REq \
-        "^[[:space:]]*[*].*[[:space:]]+@[ @]?[[:alnum:]._-]+" \
-        /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null; then
+    local transport="@"
+    [[ "${protocol,,}" == "tcp" ]] && transport="@@"
+
+    if grep -RFxq \
+        "*.* ${transport}${host}:${port}" \
+        /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null; then
 
         audit_pass \
             "6.1.2.5" \
@@ -317,21 +336,15 @@ remediate_remote_rsyslog() {
         logging_backup_file "$RSYSLOG_CIS_CONFIG"
     fi
 
+    local forwarding_rule
+
     case "${protocol,,}" in
         tcp)
-            cat >> "$RSYSLOG_CIS_CONFIG" <<EOF
-
-# Remote rsyslog forwarding
-*.* @@${host}:${port}
-EOF
+            forwarding_rule="*.* @@${host}:${port}"
             ;;
 
         udp)
-            cat >> "$RSYSLOG_CIS_CONFIG" <<EOF
-
-# Remote rsyslog forwarding
-*.* @${host}:${port}
-EOF
+            forwarding_rule="*.* @${host}:${port}"
             ;;
 
         *)
@@ -339,6 +352,11 @@ EOF
             return 1
             ;;
     esac
+
+    if ! grep -Fxq "$forwarding_rule" "$RSYSLOG_CIS_CONFIG" 2>/dev/null; then
+        printf '\n# Remote rsyslog forwarding\n%s\n' "$forwarding_rule" \
+            >> "$RSYSLOG_CIS_CONFIG"
+    fi
 
     if ! rsyslogd -N1 >/dev/null 2>"$LOG_DIR/rsyslog-validation.log"; then
         log_error "rsyslog validation failed after adding remote logging"
@@ -464,6 +482,14 @@ remediate_logfile_permissions() {
 # ------------------------------------------------------------
 
 audit_auditd_service() {
+    if [[ "${INSTALL_AUDITD:-yes}" != "yes" || "${ENABLE_AUDITD:-yes}" != "yes" ]]; then
+        audit_skip \
+            "6.2-AUDITD" \
+            "auditd service" \
+            "auditd installation or service activation is disabled in cis.conf"
+        return 0
+    fi
+
     if ! command_exists auditd; then
         audit_fail \
             "6.2-AUDITD" \
@@ -501,6 +527,11 @@ audit_auditd_service() {
 
 
 remediate_auditd_service() {
+    if [[ "${INSTALL_AUDITD:-yes}" != "yes" || "${ENABLE_AUDITD:-yes}" != "yes" ]]; then
+        log_warning "auditd installation or service activation is disabled in cis.conf"
+        return 0
+    fi
+
     if ! command_exists auditd; then
         log_info "Installing auditd"
 
@@ -869,8 +900,8 @@ audit_log_directories() {
             failures=$((failures + 1))
         fi
 
-        if [[ "$mode" =~ ^[0-7]+$ ]] &&
-           (( 8#$mode & 00002 )); then
+          if [[ "$mode" =~ ^[0-7]+$ ]] &&
+              (( 8#$mode & 00022 )); then
 
             audit_fail \
                 "6.1.3.1" \
@@ -908,8 +939,8 @@ remediate_log_directories() {
             log_warning "Could not set root ownership on $directory"
         }
 
-        chmod o-w "$directory" 2>/dev/null || {
-            log_warning "Could not remove world-write permission from $directory"
+        chmod go-w "$directory" 2>/dev/null || {
+            log_warning "Could not remove group/other write permission from $directory"
         }
 
     done
@@ -928,8 +959,12 @@ section_05_audit() {
     local failures=0
 
     # rsyslog
-    audit_rsyslog_service || failures=$((failures + 1))
-    audit_rsyslog_facilities || failures=$((failures + 1))
+    if [[ "${INSTALL_RSYSLOG:-yes}" == "yes" && "${ENABLE_RSYSLOG:-yes}" == "yes" ]]; then
+        audit_rsyslog_service || failures=$((failures + 1))
+        audit_rsyslog_facilities || failures=$((failures + 1))
+    else
+        audit_skip "6.1.2.4" "rsyslog controls disabled in cis.conf"
+    fi
     audit_remote_rsyslog || failures=$((failures + 1))
 
     # Log files
@@ -937,10 +972,14 @@ section_05_audit() {
     audit_log_directories || failures=$((failures + 1))
 
     # auditd
-    audit_auditd_service || failures=$((failures + 1))
-    audit_audit_rules_directory || failures=$((failures + 1))
-    audit_cis_audit_rules || failures=$((failures + 1))
-    audit_auditd_config || failures=$((failures + 1))
+    if [[ "${INSTALL_AUDITD:-yes}" == "yes" && "${ENABLE_AUDITD:-yes}" == "yes" ]]; then
+        audit_auditd_service || failures=$((failures + 1))
+        audit_audit_rules_directory || failures=$((failures + 1))
+        audit_cis_audit_rules || failures=$((failures + 1))
+        audit_auditd_config || failures=$((failures + 1))
+    else
+        audit_skip "6.2-AUDITD" "auditd controls disabled in cis.conf"
+    fi
 
     end_section "05 - Logging and Audit Audit"
 
@@ -961,8 +1000,10 @@ section_05_remediate() {
     # rsyslog
     # --------------------------------------------------------
 
-    remediate_rsyslog_service || failures=$((failures + 1))
-    remediate_rsyslog_facilities || failures=$((failures + 1))
+    if [[ "${INSTALL_RSYSLOG:-yes}" == "yes" && "${ENABLE_RSYSLOG:-yes}" == "yes" ]]; then
+        remediate_rsyslog_service || failures=$((failures + 1))
+        remediate_rsyslog_facilities || failures=$((failures + 1))
+    fi
 
     # Remote logging is intentionally configurable.
     remediate_remote_rsyslog || failures=$((failures + 1))
@@ -978,7 +1019,9 @@ section_05_remediate() {
     # auditd
     # --------------------------------------------------------
 
-    remediate_audit_subsystem || failures=$((failures + 1))
+    if [[ "${INSTALL_AUDITD:-yes}" == "yes" && "${ENABLE_AUDITD:-yes}" == "yes" ]]; then
+        remediate_audit_subsystem || failures=$((failures + 1))
+    fi
 
     end_section "05 - Logging and Audit Remediation"
 
