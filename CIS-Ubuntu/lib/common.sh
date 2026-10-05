@@ -487,7 +487,7 @@ safe_reload_sshd() {
  return 1
  fi
 
- if ! sshd -t; thens
+ if ! sshd -t; then
  return 1
  fi
 
