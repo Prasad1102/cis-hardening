@@ -460,38 +460,13 @@ audit_sshd_access_config() {
         return 0
     fi
 
-    # --- REMEDIATION CODE START ---
-    # If it fails the check, automatically append AllowGroups to the config file
-    echo "Remediating 5.1.4: Adding AllowGroups to sshd_config..."
-    
-    # Ensure a secure management group exists on the system (e.g., 'wheel' or 'sudo')
-    # This example appends 'AllowGroups wheel' to the configuration
-    echo "AllowGroups wheel" >> /etc/ssh/sshd_config
-
-    # Reload the SSH configuration safely
-    if sshd -t 2>/dev/null; then
-        systemctl restart sshd || systemctl restart ssh
-        
-        # Re-verify the pass state
-        audit_pass \
-            "5.1.4" \
-            "sshd access configuration" \
-            "SSH access restriction was missing but has been automatically remediated"
-        return 0
-    else
-        # Rollback if syntax check fails to prevent lockout
-        sed -i '/AllowGroups wheel/d' /etc/ssh/sshd_config
-    fi
-    # --- REMEDIATION CODE END ---
-
-    # audit_warning \
-    #     "5.1.4" \
-    #     "sshd access configuration" \
-    #     "No AllowUsers/AllowGroups/DenyUsers/DenyGroups restriction configured; user-specific access policy is required"
+    audit_warning \
+        "5.1.4" \
+        "sshd access configuration" \
+        "No AllowUsers/AllowGroups/DenyUsers/DenyGroups restriction configured; user-specific access policy is required"
 
     return 0
 }
-
 
 
 remediate_sshd_access_config() {
