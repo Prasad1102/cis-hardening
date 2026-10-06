@@ -122,7 +122,6 @@ remediate_02_services_network() {
     log_info "Starting services and network remediation."
 
     local failed=0
-    local actual_all actual_default final_all final_default
 
     remediate_telnet_client || failed=1
     remediate_ftp_client || failed=1
@@ -131,32 +130,6 @@ remediate_02_services_network() {
 
     remediate_ipv4_settings || failed=1
     remediate_ipv6_settings || failed=1
-
-    actual_all="$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)"
-    actual_default="$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-
-    if [[ "$actual_all" != "$NET_IPV4_ALL_LOG_MARTIANS" ]]; then
-        sysctl -w "net.ipv4.conf.all.log_martians=$NET_IPV4_ALL_LOG_MARTIANS" \
-            >> "$REMEDIATION_LOG" 2>&1
-    fi
-
-    if [[ "$actual_default" != "$NET_IPV4_DEFAULT_LOG_MARTIANS" ]]; then
-        sysctl -w "net.ipv4.conf.default.log_martians=$NET_IPV4_DEFAULT_LOG_MARTIANS" \
-            >> "$REMEDIATION_LOG" 2>&1
-    fi
-
-    final_all="$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)"
-    final_default="$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-
-    if [[ "$final_all" != "$NET_IPV4_ALL_LOG_MARTIANS" ]]; then
-        log_error "Failed to apply net.ipv4.conf.all.log_martians"
-        failed=1
-    fi
-
-    if [[ "$final_default" != "$NET_IPV4_DEFAULT_LOG_MARTIANS" ]]; then
-        log_error "Failed to apply net.ipv4.conf.default.log_martians"
-        failed=1
-    fi
 
     log_info "Services and network remediation completed."
     return "$failed"
@@ -793,8 +766,6 @@ audit_ipv4_settings() {
     # 3.3.1.16
     #
 
-    log_info "DEBUG audit before 3.3.1.16: $(date '+%Y-%m-%d %H:%M:%S') all=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null) default=$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-
     check_expected_value \
         "3.3.1.16" \
         "net.ipv4.conf.all.log_martians" \
@@ -806,7 +777,8 @@ audit_ipv4_settings() {
         "3.3.1.16" \
         "net.ipv4.conf.all.log_martians" \
         "${NET_IPV4_ALL_LOG_MARTIANS}" \
-        /etc/sysctl.conf || failed=1
+        /etc/sysctl.d/99-cis-hardening.conf
+
 
 
     #
@@ -824,10 +796,7 @@ audit_ipv4_settings() {
         "3.3.1.17" \
         "net.ipv4.conf.default.log_martians" \
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
-        /etc/sysctl.conf || failed=1
-
-    log_info "DEBUG audit after 3.3.1.17: $(date '+%Y-%m-%d %H:%M:%S') all=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null) default=$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-
+        /etc/sysctl.d/99-cis-hardening.conf
 
     #
     # 3.3.1.18
@@ -1052,15 +1021,33 @@ remediate_ipv4_settings() {
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
         /etc/sysctl.conf || return 1
 
-    log_info "DEBUG remediation before sysctl --system: $(date '+%Y-%m-%d %H:%M:%S') all=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null) default=$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-
     if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
         log_error "Unable to apply the persisted IPv4 sysctl configuration."
         return 1
     fi
 
-    log_info "DEBUG remediation after sysctl --system: $(date '+%Y-%m-%d %H:%M:%S') all=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null) default=$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
-    log_info "DEBUG remediation before return 0: $(date '+%Y-%m-%d %H:%M:%S') all=$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null) default=$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
+    local actual_all actual_default
+
+    actual_all="$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)"
+    actual_default="$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
+
+    if [[ "$actual_all" != "$NET_IPV4_ALL_LOG_MARTIANS" ]]; then
+        log_error \
+            "3.3.1.16 failed: net.ipv4.conf.all.log_martians=$actual_all"
+        return 1
+    fi
+
+    if [[ "$actual_default" != "$NET_IPV4_DEFAULT_LOG_MARTIANS" ]]; then
+        log_error \
+            "3.3.1.17 failed: net.ipv4.conf.default.log_martians=$actual_default"
+        return 1
+    fi
+
+    log_success \
+        "3.3.1.16 net.ipv4.conf.all.log_martians=$actual_all"
+
+    log_success \
+        "3.3.1.17 net.ipv4.conf.default.log_martians=$actual_default"
 
     return 0
 }
