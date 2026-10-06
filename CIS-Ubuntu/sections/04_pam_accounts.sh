@@ -1217,9 +1217,17 @@ audit_password_inactive_lock() {
 
 remediate_password_inactive_lock() {
     local expected="${PASSWORD_INACTIVE_DAYS:-30}"
+    local actual
 
     if ! useradd -D -f "$expected"; then
         log_error "Could not set the default inactive password lock for new accounts"
+        return 1
+    fi
+
+    actual="$(useradd -D 2>/dev/null | sed -n 's/^INACTIVE=//p')"
+    if [[ "$actual" != "$expected" ]]; then
+        log_error \
+            "Default inactive policy remains $actual; expected $expected"
         return 1
     fi
 
@@ -1693,8 +1701,6 @@ section_04_remediate() {
     local failures=0
 
     remediate_pam_faillock || failures=$((failures + 1))
-    remediate_pam_pwquality_module || failures=$((failures + 1))
-
     remediate_faillock_deny || failures=$((failures + 1))
     remediate_faillock_unlock_time || failures=$((failures + 1))
 
@@ -1707,6 +1713,7 @@ section_04_remediate() {
     remediate_root_password_quality || failures=$((failures + 1))
 
     remediate_root_password_history || failures=$((failures + 1))
+    remediate_pam_pwquality_module || failures=$((failures + 1))
     remediate_pam_unix_nullok || failures=$((failures + 1))
 
     remediate_password_expiration || failures=$((failures + 1))

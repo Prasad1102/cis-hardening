@@ -825,6 +825,7 @@ audit_ipv4_settings() {
 remediate_ipv4_settings() {
 
     local sysctl_file="/etc/sysctl.d/99-cis-hardening.conf"
+    local actual_all actual_default final_all final_default
 
     backup_file "$sysctl_file"
 
@@ -1023,6 +1024,32 @@ remediate_ipv4_settings() {
 
     if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
         log_error "Unable to apply the persisted IPv4 sysctl configuration."
+        return 1
+    fi
+
+    actual_all="$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)"
+    actual_default="$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
+
+    if [[ "$actual_all" != "1" ]]; then
+        sysctl -w net.ipv4.conf.all.log_martians=1 \
+            >> "$REMEDIATION_LOG" 2>&1
+    fi
+
+    if [[ "$actual_default" != "1" ]]; then
+        sysctl -w net.ipv4.conf.default.log_martians=1 \
+            >> "$REMEDIATION_LOG" 2>&1
+    fi
+
+    final_all="$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)"
+    final_default="$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)"
+
+    if [[ "$final_all" != "1" ]]; then
+        log_error "Failed to apply net.ipv4.conf.all.log_martians"
+        return 1
+    fi
+
+    if [[ "$final_default" != "1" ]]; then
+        log_error "Failed to apply net.ipv4.conf.default.log_martians"
         return 1
     fi
 
