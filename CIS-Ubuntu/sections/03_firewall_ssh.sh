@@ -1220,10 +1220,26 @@ remediate_ufw() {
         fi
     fi
 
+    local ufw_sysctl_file="/etc/ufw/sysctl.conf"
+    if [[ -f "$ufw_sysctl_file" ]]; then
+        backup_file "$ufw_sysctl_file" || return 1
+        sed -i \
+            -e "s|^[[:space:]]*net/ipv4/conf/all/log_martians[[:space:]]*=.*|net/ipv4/conf/all/log_martians=${NET_IPV4_ALL_LOG_MARTIANS}|" \
+            -e "s|^[[:space:]]*net/ipv4/conf/default/log_martians[[:space:]]*=.*|net/ipv4/conf/default/log_martians=${NET_IPV4_DEFAULT_LOG_MARTIANS}|" \
+            "$ufw_sysctl_file" || return 1
+    fi
+
     if ! ufw --force enable >/dev/null 2>&1; then
         log_error "Failed to enable UFW"
         return 1
     fi
+
+    set_sysctl_value \
+        "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" || return 1
+    set_sysctl_value \
+        "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" || return 1
 
     audit_pass \
         "4.1.2" \
