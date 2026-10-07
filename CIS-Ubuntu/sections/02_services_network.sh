@@ -1016,10 +1016,16 @@ remediate_ipv4_settings() {
         "net.ipv4.conf.all.log_martians" \
         "${NET_IPV4_ALL_LOG_MARTIANS}" \
         /etc/sysctl.conf || return 1
+    set_sysctl_value \
+        "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" || return 1
     persist_sysctl_value \
         "net.ipv4.conf.default.log_martians" \
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
         /etc/sysctl.conf || return 1
+    set_sysctl_value \
+        "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" || return 1
 
     if ! sysctl --system >> "$REMEDIATION_LOG" 2>&1; then
         log_error "Unable to apply the persisted IPv4 sysctl configuration."
