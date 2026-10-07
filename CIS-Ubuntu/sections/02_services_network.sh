@@ -130,6 +130,12 @@ remediate_02_services_network() {
 
     remediate_ipv4_settings || failed=1
     remediate_ipv6_settings || failed=1
+    set_sysctl_value \
+        "net.ipv4.conf.all.log_martians" \
+        "${NET_IPV4_ALL_LOG_MARTIANS}" || failed=1
+    set_sysctl_value \
+        "net.ipv4.conf.default.log_martians" \
+        "${NET_IPV4_DEFAULT_LOG_MARTIANS}" || failed=1
 
     log_info "Services and network remediation completed."
     return "$failed"
@@ -977,7 +983,7 @@ remediate_ipv4_settings() {
         "net.ipv4.conf.all.log_martians" \
         "${NET_IPV4_ALL_LOG_MARTIANS}" \
         "$sysctl_file"
-
+# this is not working (Issue)
     set_sysctl_value \
         "net.ipv4.conf.all.log_martians" \
         "${NET_IPV4_ALL_LOG_MARTIANS}"
@@ -991,7 +997,7 @@ remediate_ipv4_settings() {
         "net.ipv4.conf.default.log_martians" \
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}" \
         "$sysctl_file"
-
+# this is not working (Issue)
     set_sysctl_value \
         "net.ipv4.conf.default.log_martians" \
         "${NET_IPV4_DEFAULT_LOG_MARTIANS}"
