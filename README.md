@@ -69,7 +69,7 @@ from that directory so relative command examples and paths resolve as shown.
 | File | Purpose |
 |---|---|
 | `README.md` | This guide: project layout, configuration, operation, logging, and safety information. |
-| `.github/workflows/deploy.yml` | GitHub Actions deployment workflow. On a push to `main`, it connects to the configured EC2 host over SSH and fetches/resets the checkout to `origin/main`. |
+| `.github/workflows/deploy.yml` | GitHub Actions deployment workflow. On a push to `main`, it connects to the configured EC2 host over SSH and fetches/resets the checkout to `origin/main`. (CICD File)|
 
 ### Main project files
 
