@@ -1242,6 +1242,11 @@ remediate_password_inactive_lock() {
         return 1
     fi
 
+    chage -I "$expected" root 2>/dev/null || {
+        log_error "Could not set inactive password lock for root"
+        return 1
+    }
+
     actual="$(useradd -D 2>/dev/null | sed -n 's/^INACTIVE=//p')"
     if [[ "$actual" != "$expected" ]]; then
         log_error \
