@@ -99,6 +99,7 @@ remediate_01_filesystem_boot() {
 
     local failed=0
 
+    remediate_package_updates || failed=1
     remediate_dev_shm || failed=1
     remediate_grub_password || failed=1
     remediate_kernel_settings || failed=1
@@ -132,6 +133,29 @@ remediate_01_filesystem_boot() {
 
     log_info "Filesystem and boot remediation completed."
     return "$failed"
+}
+
+
+remediate_package_updates() {
+    if [[ "${APPLY_PACKAGE_UPDATES:-no}" != "yes" ]]; then
+        log_info "Package upgrades are disabled; enable APPLY_PACKAGE_UPDATES after approving a maintenance window."
+        return 0
+    fi
+
+    command_exists apt-get || {
+        log_error "apt-get is required for security package updates."
+        return 1
+    }
+
+    apt-get update || {
+        log_error "apt-get update failed."
+        return 1
+    }
+
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --with-new-pkgs || {
+        log_error "Installing package updates failed."
+        return 1
+    }
 }
 
 

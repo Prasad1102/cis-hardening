@@ -499,6 +499,20 @@ set_pwquality_value() {
 }
 
 
+set_pwquality_flag() {
+    local flag="$1"
+
+    [[ -f "$PWQUALITY" ]] || touch "$PWQUALITY" || return 1
+    backup_file "$PWQUALITY" || return 1
+
+    if ! grep -Eq "^[[:space:]]*${flag}([[:space:]]|$)" "$PWQUALITY"; then
+        printf '%s\n' "$flag" >> "$PWQUALITY" || return 1
+    fi
+
+    chown root:root "$PWQUALITY" && chmod 644 "$PWQUALITY"
+}
+
+
 audit_pwquality_numeric() {
     local check_id="$1"
     local title="$2"
@@ -731,18 +745,20 @@ audit_root_password_quality() {
     local minlen
     minlen="$(get_pwquality_value "minlen" || true)"
 
-    if [[ "$minlen" == "${PASSWORD_MIN_LENGTH:-14}" ]]; then
+    if [[ "$minlen" == "${PASSWORD_MIN_LENGTH:-14}" ]] &&
+       [[ -f "$PWQUALITY" ]] &&
+       grep -Eq '^[[:space:]]*enforce_for_root([[:space:]]|$)' "$PWQUALITY"; then
         audit_pass \
             "5.3.3.2.8" \
             "Root password quality" \
-            "Global password quality policy applies to root password changes"
+            "Password quality settings, including enforce_for_root, apply to root"
         return 0
     fi
 
     audit_fail \
         "5.3.3.2.8" \
         "Root password quality" \
-        "Root password quality policy is not configured correctly"
+        "Expected minlen=${PASSWORD_MIN_LENGTH:-14} and enforce_for_root in $PWQUALITY"
 
     return 1
 }
@@ -769,7 +785,9 @@ remediate_root_password_quality() {
 
     set_pwquality_value \
         "ocredit" \
-        "-${PASSWORD_MIN_OTHER:-1}"
+        "-${PASSWORD_MIN_OTHER:-1}" || return 1
+
+    set_pwquality_flag "enforce_for_root" || return 1
 
     audit_pass \
         "5.3.3.2.8" \
@@ -1231,6 +1249,11 @@ remediate_password_inactive_lock() {
         return 1
     fi
 
+    chage -I "$expected" root 2>/dev/null || {
+        log_error "Could not set the inactive password lock for root."
+        return 1
+    }
+
     while IFS=: read -r username _ uid _ _ home shell; do
 
         if (( uid < 1000 )); then
@@ -1461,6 +1484,19 @@ EOF
 
     chown root:root "$profile_file"
     chmod 644 "$profile_file"
+
+    local startup_file
+    for startup_file in /etc/profile /etc/bash.bashrc; do
+        if [[ ! -f "$startup_file" ]]; then
+            log_error "Required shell startup file is missing: $startup_file"
+            return 1
+        fi
+
+        if ! grep -Eq "^[[:space:]]*umask[[:space:]]+${expected}([[:space:]]|$)" "$startup_file"; then
+            backup_file "$startup_file" || return 1
+            printf '\n# CIS Ubuntu 24.04 LTS default umask\numask %s\n' "$expected" >> "$startup_file" || return 1
+        fi
+    done
 
     audit_pass \
         "5.4.3.3" \

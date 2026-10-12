@@ -7,6 +7,7 @@
 # Usage:
 # sudo ./hardening.sh audit
 # sudo ./hardening.sh remediate
+# sudo ./hardening.sh verify
 #
 # Project structure:
 #
@@ -100,6 +101,7 @@ print_usage() {
 Usage:
   sudo ./hardening.sh audit
   sudo ./hardening.sh remediate
+  sudo ./hardening.sh verify
 
 Commands:
 
@@ -110,6 +112,9 @@ Commands:
   remediate
       Apply the configured hardening settings and then run
       a final audit to identify remaining failures/manual items.
+
+  verify
+      Run the same read-only checks as audit.
 
 Examples:
 
@@ -400,6 +405,7 @@ validate_configuration() {
 
     local boolean_vars=(
         ENABLE_REMEDIATION
+        APPLY_PACKAGE_UPDATES
         CONFIGURE_TMP_MOUNT
         ENABLE_APPARMOR
         APPARMOR_RESTRICT_UNPRIVILEGED_UNCONFINED
@@ -1342,7 +1348,7 @@ main() {
     ACTION="$action"
 
     case "$action" in
-        audit|remediate)
+        audit|remediate|verify)
             ;;
         -h|--help|help)
             print_banner
@@ -1417,6 +1423,11 @@ main() {
 
         remediate)
             run_remediation
+            return $?
+            ;;
+
+        verify)
+            run_audit
             return $?
             ;;
 

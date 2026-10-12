@@ -59,6 +59,20 @@ section() {
     printf '\n============================================================\n%s\n============================================================\n' "$1"
 }
 
+test_owner_root_shadow() {
+    local path="$1" label="$2" owner
+    if [[ ! -e "$path" ]]; then
+        bad "$label (path missing)"
+        return
+    fi
+    owner="$(stat -c '%U:%G' "$path" 2>/dev/null || true)"
+    if [[ "$owner" == "root:shadow" ]]; then
+        ok "$label owner=root:shadow"
+    else
+        bad "$label owner='${owner:-unknown}', expected root:shadow"
+    fi
+}
+
 ok()   { printf '[PASS] %s\n' "$1"; PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); }
 bad()  { printf '[FAIL] %s\n' "$1"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); }
 skip() { printf '[SKIP] %s\n' "$1"; SKIP=$((SKIP+1)); TOTAL=$((TOTAL+1)); }
@@ -312,8 +326,8 @@ fi
 # ============================================================
 section "GROUP 6 - CONFIGURATION VALUES"
 
-test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_ALL_LOG_MARTIANS[[:space:]]*=[[:space:]]*1([[:space:]]|$|#)' "Config sets all.log_martians=1"
-test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_DEFAULT_LOG_MARTIANS[[:space:]]*=[[:space:]]*1([[:space:]]|$|#)' "Config sets default.log_martians=1"
+test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_ALL_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets all.log_martians=1"
+test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_DEFAULT_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets default.log_martians=1"
 test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_AUTH_TRIES[[:space:]]*=' "Config defines SSH_MAX_AUTH_TRIES"
 test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_SESSIONS[[:space:]]*=' "Config defines SSH_MAX_SESSIONS"
 test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_STARTUPS[[:space:]]*=' "Config defines SSH_MAX_STARTUPS"
@@ -325,8 +339,8 @@ test_pattern "$CONFIG" '^[[:space:]]*SSH_PERMIT_USER_ENVIRONMENT[[:space:]]*=' "
 test_pattern "$CONFIG" '^[[:space:]]*PASSWORD_MAX_DAYS[[:space:]]*=' "Config defines password maximum age"
 test_pattern "$CONFIG" '^[[:space:]]*PASSWORD_MIN_LENGTH[[:space:]]*=' "Config defines minimum password length"
 test_pattern "$CONFIG" '^[[:space:]]*FAILLOCK_DENY[[:space:]]*=' "Config defines failed-login deny threshold"
-test_pattern "$CONFIG" '^[[:space:]]*UMASK[[:space:]]*=' "Config defines default umask"
-test_pattern "$CONFIG" '^[[:space:]]*UFW_ALLOW_TCP_PORTS[[:space:]]*=' "Config defines allowed UFW TCP ports"
+test_pattern "$CONFIG" '^[[:space:]]*DEFAULT_UMASK[[:space:]]*=' "Config defines default umask"
+test_pattern "$CONFIG" '^[[:space:]]*UFW_ALLOWED_TCP_PORTS[[:space:]]*=' "Config defines allowed UFW TCP ports"
 test_pattern "$CONFIG" '^[[:space:]]*REMOTE_SYSLOG_ENABLED[[:space:]]*=' "Config defines remote syslog policy"
 test_pattern "$CONFIG" '^[[:space:]]*GRUB_SUPERUSER[[:space:]]*=' "Config defines GRUB superuser"
 test_pattern "$CONFIG" '^[[:space:]]*GRUB_PASSWORD_HASH[[:space:]]*=' "Config defines GRUB password hash setting"
@@ -457,7 +471,7 @@ test_owner_root /etc/ssh/sshd_config "SSH config ownership"
 test_mode /etc/ssh/sshd_config 600 "SSH config mode 0600"
 test_file "$SYSCTL_DROPIN" "CIS sysctl drop-in exists"
 test_pattern "$SECTIONS/03_firewall_ssh.sh" 'sshd[[:space:]]+-t' "Section 03 validates sshd configuration"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" '99-cis-hardening\.conf' "Section 03 uses an SSH drop-in"
+test_pattern "$SECTIONS/03_firewall_ssh.sh" '00-cis-hardening\.conf' "Section 03 uses an SSH drop-in"
 
 # ============================================================
 # GROUP 13: FIREWALL CHECKS
@@ -467,7 +481,12 @@ section "GROUP 13 - UFW FIREWALL"
 if command -v ufw >/dev/null 2>&1; then
     ufw status 2>/dev/null | grep -q 'Status: active' && ok "4.1.2 UFW is active" || bad "4.1.2 UFW is active"
     ufw status verbose 2>/dev/null | grep -qi 'Default: deny (incoming)' && ok "4.1.3 UFW default incoming policy is deny" || bad "4.1.3 UFW default incoming policy is deny"
-    ufw status verbose 2>/dev/null | grep -Eqi 'routed.*deny|Default:.*routed.*deny' && ok "4.1.5 UFW routed policy is deny" || bad "4.1.5 UFW routed policy is deny"
+    if ufw status verbose 2>/dev/null | grep -Eqi 'routed.*deny|Default:.*routed.*deny' ||
+       grep -Eq '^[[:space:]]*DEFAULT_FORWARD_POLICY=["'\'']?DROP["'\'']?[[:space:]]*$' /etc/default/ufw 2>/dev/null; then
+        ok "4.1.5 UFW routed policy is deny"
+    else
+        bad "4.1.5 UFW routed policy is deny"
+    fi
 else
     bad "UFW command is installed"
 fi
@@ -496,7 +515,7 @@ test_pattern /etc/security/pwquality.conf '^[[:space:]]*minlen[[:space:]]*=[[:sp
 test_pattern /etc/security/pwquality.conf '^[[:space:]]*difok[[:space:]]*=[[:space:]]*2' "Password difok is configured as 2"
 test_pattern /etc/security/pwquality.conf '^[[:space:]]*maxrepeat[[:space:]]*=[[:space:]]*3' "Password maxrepeat is configured as 3"
 test_pattern /etc/security/pwquality.conf '^[[:space:]]*maxsequence[[:space:]]*=[[:space:]]*3' "Password maxsequence is configured as 3"
-test_pattern /etc/security/pwquality.conf '^[[:space:]]*enforce_for_root' "Password quality policy enforces root"
+test_pattern /etc/security/pwquality.conf '^[[:space:]]*enforce_for_root([[:space:]]|$)' "Password quality policy enforces root"
 test_pattern /etc/login.defs '^[[:space:]]*PASS_MAX_DAYS[[:space:]]+365' "PASS_MAX_DAYS is 365"
 test_pattern /etc/login.defs '^[[:space:]]*PASS_MIN_DAYS[[:space:]]+1' "PASS_MIN_DAYS is 1"
 test_pattern /etc/login.defs '^[[:space:]]*PASS_WARN_AGE[[:space:]]+7' "PASS_WARN_AGE is 7"
@@ -517,11 +536,11 @@ fi
 # ============================================================
 section "GROUP 15 - ACCOUNT SECURITY"
 
-test_pattern /etc/pam.d/common-auth 'pam_faillock\.so.*deny=5|deny=5' "Failed login lockout threshold 5 appears in PAM"
-test_pattern /etc/pam.d/common-auth 'unlock_time=900|pam_faillock\.so' "PAM failed-login unlock policy is configured"
+test_pattern /etc/security/faillock.conf '^[[:space:]]*deny[[:space:]]*=[[:space:]]*5([[:space:]]|$)' "Failed login lockout threshold 5 is configured"
+test_pattern /etc/security/faillock.conf '^[[:space:]]*unlock_time[[:space:]]*=[[:space:]]*900([[:space:]]|$)' "PAM failed-login unlock policy is configured"
 test_pattern /etc/pam.d/su 'pam_wheel\.so' "su restriction references pam_wheel"
-test_pattern /etc/profile 'umask[[:space:]]+027|umask[[:space:]]+077' "Global profile sets restrictive umask"
-test_pattern /etc/bash.bashrc 'umask[[:space:]]+027|umask[[:space:]]+077' "Global bashrc sets restrictive umask"
+test_pattern /etc/profile '^[[:space:]]*umask[[:space:]]+(027|077)([[:space:]]|$)' "Global profile sets restrictive umask"
+test_pattern /etc/bash.bashrc '^[[:space:]]*umask[[:space:]]+(027|077)([[:space:]]|$)' "Global bashrc sets restrictive umask"
 
 root_path="$(sudo -n -u root /usr/bin/env 2>/dev/null | awk -F= '$1=="PATH"{print $2}' || true)"
 if [[ -z "$root_path" ]]; then
@@ -587,7 +606,13 @@ section "GROUP 18 - FILESYSTEM AND BOOT SECURITY"
 test_file /etc/issue "Local login banner file exists"
 test_file /etc/issue.net "SSH warning banner file exists"
 test_file /etc/motd "MOTD file exists"
-test_pattern /etc/ssh/sshd_config '^[[:space:]]*Banner[[:space:]]+/etc/issue\.net|Banner[[:space:]]+/etc/issue\.net' "SSH banner is configured in SSH config or effective drop-in"
+effective_banner="$(sshd -T 2>/dev/null | awk '$1 == "banner" {print $2; exit}' || true)"
+if [[ "$effective_banner" == "/etc/issue.net" ]] ||
+   grep -Eq '^[[:space:]]*Banner[[:space:]]+/etc/issue\.net([[:space:]]|$)' /etc/ssh/sshd_config.d/00-cis-hardening.conf 2>/dev/null; then
+    ok "SSH banner is configured in SSH config or effective drop-in"
+else
+    bad "SSH banner is configured in SSH config or effective drop-in"
+fi
 test_pattern "$SECTIONS/01_filesystem_boot.sh" 'GRUB_PASSWORD_HASH' "Section 01 supports GRUB password hash"
 test_pattern "$SECTIONS/01_filesystem_boot.sh" 'fs\.suid_dumpable' "Section 01 handles fs.suid_dumpable"
 test_pattern "$SECTIONS/01_filesystem_boot.sh" 'kernel\.dmesg_restrict' "Section 01 handles kernel.dmesg_restrict"
@@ -676,9 +701,9 @@ test_owner_root /etc/passwd "/etc/passwd owner"
 test_mode /etc/passwd 644 "/etc/passwd mode"
 test_owner_root /etc/group "/etc/group owner"
 test_mode /etc/group 644 "/etc/group mode"
-test_owner_root /etc/shadow "/etc/shadow owner"
+test_owner_root_shadow /etc/shadow "/etc/shadow owner"
 test_mode /etc/shadow 640 "/etc/shadow mode"
-test_owner_root /etc/gshadow "/etc/gshadow owner"
+test_owner_root_shadow /etc/gshadow "/etc/gshadow owner"
 test_mode /etc/gshadow 640 "/etc/gshadow mode"
 test_owner_root /etc/sudoers "/etc/sudoers owner"
 test_mode /etc/sudoers 440 "/etc/sudoers mode"
@@ -712,7 +737,7 @@ fi
 # ============================================================
 section "GROUP 21 - CONTROL IMPLEMENTATION COVERAGE"
 
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'apt-get|apt[[:space:]]' "Section 01 includes package/security update handling"
+test_pattern "$SECTIONS/01_filesystem_boot.sh" 'apt-get update|apt-get upgrade' "Section 01 includes package/security update handling"
 test_pattern "$SECTIONS/02_services_network.sh" 'persist_sysctl_value' "Section 02 persists sysctl settings"
 test_pattern "$SECTIONS/02_services_network.sh" 'sysctl --system|sysctl -w|set_sysctl_value' "Section 02 applies runtime sysctl settings"
 test_pattern "$SECTIONS/03_firewall_ssh.sh" 'ufw default deny incoming' "Section 03 configures UFW incoming default"
