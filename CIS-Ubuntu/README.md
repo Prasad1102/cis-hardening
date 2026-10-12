@@ -13,6 +13,11 @@ sudo ./test.sh
 
 `audit`, `verify`, and `test.sh` are read-only. Remediation changes system
 configuration; review `cis.conf` and keep a recovery path before running it.
+Run `sudo ./test.sh` for privileged host checks; without root, checks that
+require reading protected SSH, firewall, audit, or account settings are skipped.
+To fix the root inactivity result on an already configured host, run
+`sudo chage -I 30 root`, confirm with `sudo chage -l root`, then rerun
+`sudo ./test.sh`.
 
 Package upgrades are disabled by default because they can restart services or
 affect applications. After approving a maintenance window, set

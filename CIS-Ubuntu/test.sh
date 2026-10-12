@@ -432,11 +432,13 @@ for mod in atm can sctp tipc; do
 done
 
 # ============================================================
-# GROUP 11: SSH EFFECTIVE CONFIGURATION (15 cases)
+# GROUP 11: SSH EFFECTIVE CONFIGURATION (16 cases)
 # ============================================================
 section "GROUP 11 - SSH EFFECTIVE CONFIGURATION"
 
-if command -v sshd >/dev/null 2>&1; then
+if [[ $EUID -ne 0 ]]; then
+    for n in {1..16}; do skip "SSH effective configuration check $n (run as root to read and validate sshd configuration)"; done
+elif command -v sshd >/dev/null 2>&1; then
     SSHD="$(sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null || true)"
     ssh_value() { printf '%s\n' "$SSHD" | awk -v k="$1" '$1==k {print $2; exit}'; }
 
@@ -458,7 +460,7 @@ if command -v sshd >/dev/null 2>&1; then
     [[ "$(ssh_value allowagentforwarding)" == "no" ]] && ok "SSH agent forwarding disabled" || bad "SSH agent forwarding expected no, got $(ssh_value allowagentforwarding)"
     if sshd -t 2>/dev/null; then ok "sshd configuration syntax is valid"; else bad "sshd configuration syntax is valid"; fi
 else
-    for n in {1..15}; do skip "SSH effective configuration check $n (sshd unavailable)"; done
+    for n in {1..16}; do skip "SSH effective configuration check $n (sshd unavailable)"; done
 fi
 
 # ============================================================
@@ -478,7 +480,11 @@ test_pattern "$SECTIONS/03_firewall_ssh.sh" '00-cis-hardening\.conf' "Section 03
 # ============================================================
 section "GROUP 13 - UFW FIREWALL"
 
-if command -v ufw >/dev/null 2>&1; then
+if [[ $EUID -ne 0 ]]; then
+    skip "4.1.2 UFW active status (run as root)"
+    skip "4.1.3 UFW default incoming policy (run as root)"
+    skip "4.1.5 UFW routed policy (run as root)"
+elif command -v ufw >/dev/null 2>&1; then
     ufw status 2>/dev/null | grep -q 'Status: active' && ok "4.1.2 UFW is active" || bad "4.1.2 UFW is active"
     ufw status verbose 2>/dev/null | grep -qi 'Default: deny (incoming)' && ok "4.1.3 UFW default incoming policy is deny" || bad "4.1.3 UFW default incoming policy is deny"
     if ufw status verbose 2>/dev/null | grep -Eqi 'routed.*deny|Default:.*routed.*deny' ||
@@ -520,9 +526,11 @@ test_pattern /etc/login.defs '^[[:space:]]*PASS_MAX_DAYS[[:space:]]+365' "PASS_M
 test_pattern /etc/login.defs '^[[:space:]]*PASS_MIN_DAYS[[:space:]]+1' "PASS_MIN_DAYS is 1"
 test_pattern /etc/login.defs '^[[:space:]]*PASS_WARN_AGE[[:space:]]+7' "PASS_WARN_AGE is 7"
 
-if command -v chage >/dev/null 2>&1; then
-    root_inactive="$(chage -l root 2>/dev/null | awk -F: '/Password inactive/ {sub(/^[[:space:]]+/,"",$2); print $2}')"
-    if [[ "$root_inactive" == "30 days" || "$root_inactive" == "30" ]]; then
+if [[ $EUID -ne 0 ]]; then
+    skip "Root password inactivity (run as root)"
+elif command -v chage >/dev/null 2>&1; then
+    root_inactive="$(getent shadow root 2>/dev/null | awk -F: 'NR == 1 {print $7}')"
+    if [[ "$root_inactive" == "30" ]]; then
         ok "Root password inactivity is 30 days"
     else
         bad "Root password inactivity expected 30 days (got ${root_inactive:-unknown})"
@@ -562,8 +570,13 @@ section "GROUP 16 - LOGGING AND AUDIT"
 
 test_file /etc/rsyslog.conf "rsyslog main configuration exists"
 test_dir /etc/rsyslog.d "rsyslog drop-in directory exists"
-test_file /etc/audit/auditd.conf "auditd configuration exists"
-test_dir /etc/audit/rules.d "audit rules directory exists"
+if [[ $EUID -eq 0 ]]; then
+    test_file /etc/audit/auditd.conf "auditd configuration exists"
+    test_dir /etc/audit/rules.d "audit rules directory exists"
+else
+    skip "auditd configuration visibility (run as root)"
+    skip "audit rules directory visibility (run as root)"
+fi
 test_service_active rsyslog
 test_service_enabled rsyslog
 test_service_active auditd
@@ -606,12 +619,16 @@ section "GROUP 18 - FILESYSTEM AND BOOT SECURITY"
 test_file /etc/issue "Local login banner file exists"
 test_file /etc/issue.net "SSH warning banner file exists"
 test_file /etc/motd "MOTD file exists"
-effective_banner="$(sshd -T 2>/dev/null | awk '$1 == "banner" {print $2; exit}' || true)"
-if [[ "$effective_banner" == "/etc/issue.net" ]] ||
-   grep -Eq '^[[:space:]]*Banner[[:space:]]+/etc/issue\.net([[:space:]]|$)' /etc/ssh/sshd_config.d/00-cis-hardening.conf 2>/dev/null; then
-    ok "SSH banner is configured in SSH config or effective drop-in"
+if [[ $EUID -ne 0 ]]; then
+    skip "SSH banner effective configuration (run as root)"
 else
-    bad "SSH banner is configured in SSH config or effective drop-in"
+    effective_banner="$(sshd -T 2>/dev/null | awk '$1 == "banner" {print $2; exit}' || true)"
+    if [[ "$effective_banner" == "/etc/issue.net" ]] ||
+       grep -Eq '^[[:space:]]*Banner[[:space:]]+/etc/issue\.net([[:space:]]|$)' /etc/ssh/sshd_config.d/00-cis-hardening.conf 2>/dev/null; then
+        ok "SSH banner is configured in SSH config or effective drop-in"
+    else
+        bad "SSH banner is configured in SSH config or effective drop-in"
+    fi
 fi
 test_pattern "$SECTIONS/01_filesystem_boot.sh" 'GRUB_PASSWORD_HASH' "Section 01 supports GRUB password hash"
 test_pattern "$SECTIONS/01_filesystem_boot.sh" 'fs\.suid_dumpable' "Section 01 handles fs.suid_dumpable"
