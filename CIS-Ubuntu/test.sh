@@ -23,9 +23,9 @@ set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HARDENING="$ROOT/hardening.sh"
-CONFIG="$ROOT/cis.conf"
-COMMON="$ROOT/lib/common.sh"
-SECTIONS="$ROOT/sections"
+CONFIG="$ROOT/hardening.sh"
+COMMON="$ROOT/hardening.sh"
+SECTIONS="$ROOT"
 SYSCTL_DROPIN="/etc/sysctl.d/99-cis-hardening.conf"
 RUN_AUDIT=no
 
@@ -226,18 +226,18 @@ test_owner_root() {
 section "GROUP 1 - PROJECT STRUCTURE"
 
 test_file "$HARDENING" "Root hardening.sh exists"
-test_file "$CONFIG" "Root cis.conf exists"
+test_pattern "$CONFIG" '^[[:space:]]*SSH_PORT=' "Embedded CIS configuration exists"
 test_file "$ROOT/README.md" "Root README.md exists"
 test_file "$ROOT/test.sh" "Root test.sh exists"
-test_dir "$ROOT/lib" "lib directory exists"
-test_file "$COMMON" "lib/common.sh exists"
-test_dir "$SECTIONS" "sections directory exists"
-test_file "$SECTIONS/01_filesystem_boot.sh" "Section 01 exists"
-test_file "$SECTIONS/02_services_network.sh" "Section 02 exists"
-test_file "$SECTIONS/03_firewall_ssh.sh" "Section 03 exists"
-test_file "$SECTIONS/04_pam_accounts.sh" "Section 04 exists"
-test_file "$SECTIONS/05_logging_audit.sh" "Section 05 exists"
-test_file "$SECTIONS/06_permissions.sh" "Section 06 exists"
+test_pattern "$HARDENING" 'Embedded common library' "Common helpers are embedded"
+test_pattern "$COMMON" 'audit_pass\(\)' "Common helpers are present"
+test_pattern "$HARDENING" 'Section 01 - Filesystem' "CIS sections are embedded"
+test_function "$HARDENING" "section_01_filesystem_boot"
+test_function "$HARDENING" "section_02_services_network"
+test_function "$HARDENING" "section_03_firewall_ssh"
+test_function "$HARDENING" "section_04_pam_accounts"
+test_function "$HARDENING" "section_05_logging_audit"
+test_function "$HARDENING" "audit_section_06"
 
 # ============================================================
 # GROUP 2: SHELL SYNTAX (9 individual cases)
@@ -246,13 +246,13 @@ section "GROUP 2 - SHELL SYNTAX"
 
 test_syntax "$HARDENING"
 test_syntax "$COMMON"
-test_syntax "$CONFIG"
-test_syntax "$SECTIONS/01_filesystem_boot.sh"
-test_syntax "$SECTIONS/02_services_network.sh"
-test_syntax "$SECTIONS/03_firewall_ssh.sh"
-test_syntax "$SECTIONS/04_pam_accounts.sh"
-test_syntax "$SECTIONS/05_logging_audit.sh"
-test_syntax "$SECTIONS/06_permissions.sh"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
+test_syntax "$HARDENING"
 test_syntax "$ROOT/test.sh"
 
 # ============================================================
@@ -278,24 +278,24 @@ test_pattern "$HARDENING" 'run_remediation' "Main script has remediation runner"
 # ============================================================
 section "GROUP 4 - SECTION ENTRY POINTS"
 
-test_function "$SECTIONS/01_filesystem_boot.sh" "section_01_filesystem_boot"
-test_function "$SECTIONS/01_filesystem_boot.sh" "audit_01_filesystem_boot"
-test_function "$SECTIONS/01_filesystem_boot.sh" "remediate_01_filesystem_boot"
-test_function "$SECTIONS/02_services_network.sh" "section_02_services_network"
-test_function "$SECTIONS/02_services_network.sh" "audit_02_services_network"
-test_function "$SECTIONS/02_services_network.sh" "remediate_02_services_network"
-test_function "$SECTIONS/02_services_network.sh" "audit_ipv4_settings"
-test_function "$SECTIONS/02_services_network.sh" "remediate_ipv4_settings"
-test_function "$SECTIONS/02_services_network.sh" "audit_ipv6_settings"
-test_function "$SECTIONS/02_services_network.sh" "remediate_ipv6_settings"
-test_function "$SECTIONS/03_firewall_ssh.sh" "section_03_firewall_ssh"
-test_function "$SECTIONS/03_firewall_ssh.sh" "section_03_audit"
-test_function "$SECTIONS/03_firewall_ssh.sh" "section_03_remediate"
-test_function "$SECTIONS/04_pam_accounts.sh" "section_04_pam_accounts"
-test_function "$SECTIONS/04_pam_accounts.sh" "section_04_audit"
-test_function "$SECTIONS/04_pam_accounts.sh" "section_04_remediate"
-test_function "$SECTIONS/05_logging_audit.sh" "section_05_logging_audit"
-test_function "$SECTIONS/06_permissions.sh" "audit_section_06"
+test_function "$HARDENING" "section_01_filesystem_boot"
+test_function "$HARDENING" "audit_01_filesystem_boot"
+test_function "$HARDENING" "remediate_01_filesystem_boot"
+test_function "$HARDENING" "section_02_services_network"
+test_function "$HARDENING" "audit_02_services_network"
+test_function "$HARDENING" "remediate_02_services_network"
+test_function "$HARDENING" "audit_ipv4_settings"
+test_function "$HARDENING" "remediate_ipv4_settings"
+test_function "$HARDENING" "audit_ipv6_settings"
+test_function "$HARDENING" "remediate_ipv6_settings"
+test_function "$HARDENING" "section_03_firewall_ssh"
+test_function "$HARDENING" "section_03_audit"
+test_function "$HARDENING" "section_03_remediate"
+test_function "$HARDENING" "section_04_pam_accounts"
+test_function "$HARDENING" "section_04_audit"
+test_function "$HARDENING" "section_04_remediate"
+test_function "$HARDENING" "section_05_logging_audit"
+test_function "$HARDENING" "audit_section_06"
 
 # ============================================================
 # GROUP 5: OS / EXECUTION PREREQUISITES
@@ -326,24 +326,24 @@ fi
 # ============================================================
 section "GROUP 6 - CONFIGURATION VALUES"
 
-test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_ALL_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets all.log_martians=1"
-test_pattern "$CONFIG" '^[[:space:]]*NET_IPV4_DEFAULT_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets default.log_martians=1"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_AUTH_TRIES[[:space:]]*=' "Config defines SSH_MAX_AUTH_TRIES"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_SESSIONS[[:space:]]*=' "Config defines SSH_MAX_SESSIONS"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_MAX_STARTUPS[[:space:]]*=' "Config defines SSH_MAX_STARTUPS"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_CLIENT_ALIVE_INTERVAL[[:space:]]*=' "Config defines SSH_CLIENT_ALIVE_INTERVAL"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_CLIENT_ALIVE_COUNT_MAX[[:space:]]*=' "Config defines SSH_CLIENT_ALIVE_COUNT_MAX"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_PERMIT_ROOT_LOGIN[[:space:]]*=' "Config defines SSH_PERMIT_ROOT_LOGIN"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_PERMIT_EMPTY_PASSWORDS[[:space:]]*=' "Config defines SSH_PERMIT_EMPTY_PASSWORDS"
-test_pattern "$CONFIG" '^[[:space:]]*SSH_PERMIT_USER_ENVIRONMENT[[:space:]]*=' "Config defines SSH_PERMIT_USER_ENVIRONMENT"
-test_pattern "$CONFIG" '^[[:space:]]*PASSWORD_MAX_DAYS[[:space:]]*=' "Config defines password maximum age"
-test_pattern "$CONFIG" '^[[:space:]]*PASSWORD_MIN_LENGTH[[:space:]]*=' "Config defines minimum password length"
-test_pattern "$CONFIG" '^[[:space:]]*FAILLOCK_DENY[[:space:]]*=' "Config defines failed-login deny threshold"
-test_pattern "$CONFIG" '^[[:space:]]*DEFAULT_UMASK[[:space:]]*=' "Config defines default umask"
-test_pattern "$CONFIG" '^[[:space:]]*UFW_ALLOWED_TCP_PORTS[[:space:]]*=' "Config defines allowed UFW TCP ports"
-test_pattern "$CONFIG" '^[[:space:]]*REMOTE_SYSLOG_ENABLED[[:space:]]*=' "Config defines remote syslog policy"
-test_pattern "$CONFIG" '^[[:space:]]*GRUB_SUPERUSER[[:space:]]*=' "Config defines GRUB superuser"
-test_pattern "$CONFIG" '^[[:space:]]*GRUB_PASSWORD_HASH[[:space:]]*=' "Config defines GRUB password hash setting"
+test_pattern "$HARDENING" '^[[:space:]]*NET_IPV4_ALL_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets all.log_martians=1"
+test_pattern "$HARDENING" '^[[:space:]]*NET_IPV4_DEFAULT_LOG_MARTIANS[[:space:]]*=[[:space:]]*["]?1["]?([[:space:]]|$|#)' "Config sets default.log_martians=1"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_MAX_AUTH_TRIES[[:space:]]*=' "Config defines SSH_MAX_AUTH_TRIES"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_MAX_SESSIONS[[:space:]]*=' "Config defines SSH_MAX_SESSIONS"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_MAX_STARTUPS[[:space:]]*=' "Config defines SSH_MAX_STARTUPS"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_CLIENT_ALIVE_INTERVAL[[:space:]]*=' "Config defines SSH_CLIENT_ALIVE_INTERVAL"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_CLIENT_ALIVE_COUNT_MAX[[:space:]]*=' "Config defines SSH_CLIENT_ALIVE_COUNT_MAX"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_PERMIT_ROOT_LOGIN[[:space:]]*=' "Config defines SSH_PERMIT_ROOT_LOGIN"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_PERMIT_EMPTY_PASSWORDS[[:space:]]*=' "Config defines SSH_PERMIT_EMPTY_PASSWORDS"
+test_pattern "$HARDENING" '^[[:space:]]*SSH_PERMIT_USER_ENVIRONMENT[[:space:]]*=' "Config defines SSH_PERMIT_USER_ENVIRONMENT"
+test_pattern "$HARDENING" '^[[:space:]]*PASSWORD_MAX_DAYS[[:space:]]*=' "Config defines password maximum age"
+test_pattern "$HARDENING" '^[[:space:]]*PASSWORD_MIN_LENGTH[[:space:]]*=' "Config defines minimum password length"
+test_pattern "$HARDENING" '^[[:space:]]*FAILLOCK_DENY[[:space:]]*=' "Config defines failed-login deny threshold"
+test_pattern "$HARDENING" '^[[:space:]]*DEFAULT_UMASK[[:space:]]*=' "Config defines default umask"
+test_pattern "$HARDENING" '^[[:space:]]*UFW_ALLOWED_TCP_PORTS[[:space:]]*=' "Config defines allowed UFW TCP ports"
+test_pattern "$HARDENING" '^[[:space:]]*REMOTE_SYSLOG_ENABLED[[:space:]]*=' "Config defines remote syslog policy"
+test_pattern "$HARDENING" '^[[:space:]]*GRUB_SUPERUSER[[:space:]]*=' "Config defines GRUB superuser"
+test_pattern "$HARDENING" '^[[:space:]]*GRUB_PASSWORD_HASH[[:space:]]*=' "Config defines GRUB password hash setting"
 
 # ============================================================
 # GROUP 7: IPV4 NETWORK CONTROLS - RUNTIME (13 cases)
@@ -472,8 +472,8 @@ test_file /etc/ssh/sshd_config "SSH server configuration exists"
 test_owner_root /etc/ssh/sshd_config "SSH config ownership"
 test_mode /etc/ssh/sshd_config 600 "SSH config mode 0600"
 test_file "$SYSCTL_DROPIN" "CIS sysctl drop-in exists"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'sshd[[:space:]]+-t' "Section 03 validates sshd configuration"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" '00-cis-hardening\.conf' "Section 03 uses an SSH drop-in"
+test_pattern "$HARDENING" 'sshd[[:space:]]+-t' "Section 03 validates sshd configuration"
+test_pattern "$HARDENING" '00-cis-hardening\.conf' "Section 03 uses an SSH drop-in"
 
 # ============================================================
 # GROUP 13: FIREWALL CHECKS
@@ -582,9 +582,9 @@ test_service_enabled rsyslog
 test_service_active auditd
 test_service_enabled auditd
 
-test_pattern "$SECTIONS/05_logging_audit.sh" 'REMOTE_SYSLOG_HOST' "Section 05 supports configured remote syslog host"
-test_pattern "$SECTIONS/05_logging_audit.sh" 'auth\.log' "Section 05 references Ubuntu auth.log"
-test_pattern "$SECTIONS/05_logging_audit.sh" 'auditctl|augenrules' "Section 05 handles audit rules"
+test_pattern "$HARDENING" 'REMOTE_SYSLOG_HOST' "Section 05 supports configured remote syslog host"
+test_pattern "$HARDENING" 'auth\.log' "Section 05 references Ubuntu auth.log"
+test_pattern "$HARDENING" 'auditctl|augenrules' "Section 05 handles audit rules"
 
 if grep -RqsE '^[[:space:]]*\*\.\*[[:space:]]+@{1,2}[^[:space:]]+' /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null; then
     ok "Remote syslog destination is configured"
@@ -630,13 +630,13 @@ else
         bad "SSH banner is configured in SSH config or effective drop-in"
     fi
 fi
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'GRUB_PASSWORD_HASH' "Section 01 supports GRUB password hash"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'fs\.suid_dumpable' "Section 01 handles fs.suid_dumpable"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'kernel\.dmesg_restrict' "Section 01 handles kernel.dmesg_restrict"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'kernel\.randomize_va_space' "Section 01 handles kernel.randomize_va_space"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'apparmor' "Section 01 handles AppArmor"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'apport' "Section 01 handles apport"
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'aide' "Section 01 handles AIDE"
+test_pattern "$HARDENING" 'GRUB_PASSWORD_HASH' "Section 01 supports GRUB password hash"
+test_pattern "$HARDENING" 'fs\.suid_dumpable' "Section 01 handles fs.suid_dumpable"
+test_pattern "$HARDENING" 'kernel\.dmesg_restrict' "Section 01 handles kernel.dmesg_restrict"
+test_pattern "$HARDENING" 'kernel\.randomize_va_space' "Section 01 handles kernel.randomize_va_space"
+test_pattern "$HARDENING" 'apparmor' "Section 01 handles AppArmor"
+test_pattern "$HARDENING" 'apport' "Section 01 handles apport"
+test_pattern "$HARDENING" 'aide' "Section 01 handles AIDE"
 
 test_sysctl fs.suid_dumpable 0 "1.5.4 fs.suid_dumpable"
 test_sysctl kernel.dmesg_restrict 1 "1.5.5 kernel.dmesg_restrict"
@@ -733,9 +733,9 @@ else
     skip "/etc/sudoers.d directory absent"
 fi
 
-test_pattern "$SECTIONS/06_permissions.sh" 'world.writable|world_writable|world writable' "Section 06 audits world-writable files/directories"
-test_pattern "$SECTIONS/06_permissions.sh" 'cron' "Section 06 audits cron permissions"
-test_pattern "$SECTIONS/06_permissions.sh" 'sshd_config|/etc/ssh' "Section 06 audits SSH file permissions"
+test_pattern "$HARDENING" 'world.writable|world_writable|world writable' "Section 06 audits world-writable files/directories"
+test_pattern "$HARDENING" 'cron' "Section 06 audits cron permissions"
+test_pattern "$HARDENING" 'sshd_config|/etc/ssh' "Section 06 audits SSH file permissions"
 
 # Check for world-writable regular files without changing anything.
 if command -v find >/dev/null 2>&1; then
@@ -754,20 +754,20 @@ fi
 # ============================================================
 section "GROUP 21 - CONTROL IMPLEMENTATION COVERAGE"
 
-test_pattern "$SECTIONS/01_filesystem_boot.sh" 'apt-get update|apt-get upgrade' "Section 01 includes package/security update handling"
-test_pattern "$SECTIONS/02_services_network.sh" 'persist_sysctl_value' "Section 02 persists sysctl settings"
-test_pattern "$SECTIONS/02_services_network.sh" 'sysctl --system|sysctl -w|set_sysctl_value' "Section 02 applies runtime sysctl settings"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'ufw default deny incoming' "Section 03 configures UFW incoming default"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'ufw default deny routed' "Section 03 configures UFW routed default"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'PermitRootLogin' "Section 03 handles PermitRootLogin"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'MaxAuthTries' "Section 03 handles MaxAuthTries"
-test_pattern "$SECTIONS/03_firewall_ssh.sh" 'MaxStartups' "Section 03 handles MaxStartups"
-test_pattern "$SECTIONS/04_pam_accounts.sh" 'pam_faillock' "Section 04 handles pam_faillock"
-test_pattern "$SECTIONS/04_pam_accounts.sh" 'pam_pwquality' "Section 04 handles password quality"
-test_pattern "$SECTIONS/04_pam_accounts.sh" 'pam_pwhistory|remember=' "Section 04 handles password history"
-test_pattern "$SECTIONS/05_logging_audit.sh" 'rsyslog' "Section 05 handles rsyslog"
-test_pattern "$SECTIONS/05_logging_audit.sh" 'auditd|auditctl|augenrules' "Section 05 handles auditd/rules"
-test_pattern "$SECTIONS/06_permissions.sh" 'chmod|set_file_permissions|install -o' "Section 06 contains permission remediation"
+test_pattern "$HARDENING" 'apt-get update|apt-get upgrade' "Section 01 includes package/security update handling"
+test_pattern "$HARDENING" 'persist_sysctl_value' "Section 02 persists sysctl settings"
+test_pattern "$HARDENING" 'sysctl --system|sysctl -w|set_sysctl_value' "Section 02 applies runtime sysctl settings"
+test_pattern "$HARDENING" 'ufw default deny incoming' "Section 03 configures UFW incoming default"
+test_pattern "$HARDENING" 'ufw default deny routed' "Section 03 configures UFW routed default"
+test_pattern "$HARDENING" 'PermitRootLogin' "Section 03 handles PermitRootLogin"
+test_pattern "$HARDENING" 'MaxAuthTries' "Section 03 handles MaxAuthTries"
+test_pattern "$HARDENING" 'MaxStartups' "Section 03 handles MaxStartups"
+test_pattern "$HARDENING" 'pam_faillock' "Section 04 handles pam_faillock"
+test_pattern "$HARDENING" 'pam_pwquality' "Section 04 handles password quality"
+test_pattern "$HARDENING" 'pam_pwhistory|remember=' "Section 04 handles password history"
+test_pattern "$HARDENING" 'rsyslog' "Section 05 handles rsyslog"
+test_pattern "$HARDENING" 'auditd|auditctl|augenrules' "Section 05 handles auditd/rules"
+test_pattern "$HARDENING" 'chmod|set_file_permissions|install -o' "Section 06 contains permission remediation"
 
 # ============================================================
 # GROUP 22: MANUAL / ENVIRONMENT-SPECIFIC CONTROLS
